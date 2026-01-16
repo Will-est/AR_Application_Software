@@ -16,7 +16,6 @@
 #include "Pattern.hpp"
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/nonfree/features2d.hpp>
 
 class PatternDetector
 {
@@ -26,10 +25,10 @@ public:
      */
     PatternDetector
         (
-        cv::Ptr<cv::FeatureDetector>     detector  = new cv::ORB(1000), 
-        cv::Ptr<cv::DescriptorExtractor> extractor = new cv::FREAK(false, false), 
-        cv::Ptr<cv::DescriptorMatcher>   matcher   = new cv::BFMatcher(cv::NORM_HAMMING, true),
-        bool enableRatioTest                       = false
+        cv::Ptr<cv::Feature2D>         detector  = cv::ORB::create(1000), 
+        cv::Ptr<cv::Feature2D>         extractor = cv::ORB::create(1000), 
+        cv::Ptr<cv::DescriptorMatcher> matcher   = cv::BFMatcher::create(cv::NORM_HAMMING, true),
+        bool enableRatioTest                      = false
         );
 
     /**
@@ -87,10 +86,10 @@ private:
     cv::Mat                   m_roughHomography;
     cv::Mat                   m_refinedHomography;
 
-    Pattern                          m_pattern;
-    cv::Ptr<cv::FeatureDetector>     m_detector;
-    cv::Ptr<cv::DescriptorExtractor> m_extractor;
-    cv::Ptr<cv::DescriptorMatcher>   m_matcher;
+    Pattern                        m_pattern;
+    cv::Ptr<cv::Feature2D>         m_detector;
+    cv::Ptr<cv::Feature2D>         m_extractor;
+    cv::Ptr<cv::DescriptorMatcher> m_matcher;
 };
 
 #endif

@@ -10,7 +10,6 @@
 */
 
 // File includes:
-#include <windows.h>
 #include "ARDrawingContext.hpp"
 
 // Include standard headers
@@ -21,18 +20,10 @@
 // Include GLEW
 #include <GL/glew.h>
 
-// Include GLFW
-#include <glfw3.h>
-GLFWwindow* window;
-
 // Include GLM
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 using namespace glm;
-
-// Standard includes:
-#include <gl/gl.h>
-#include <gl/glu.h>
 
 #include "objloader.hpp"
 #include "texture.hpp"
@@ -74,12 +65,6 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 	cv::setOpenGlContext(windowName);
 	cv::setOpenGlDrawCallback(windowName, ARDrawingContextDrawCallback, this);
 	
-	// Initialise GLFW
-	if (!glfwInit())
-	{
-		fprintf(stderr, "Failed to initialize GLFW\n");
-	}
-
 	glewExperimental = true; // Needed for core profile
 	if (glewInit() != GLEW_OK) {
 		fprintf(stderr, "Failed to initialize GLEW\n");

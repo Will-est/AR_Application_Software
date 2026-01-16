@@ -3,9 +3,11 @@ project(ARProject)
 
 find_package(OpenCV REQUIRED )
 find_package(OpenGL REQUIRED )
+find_package(GLEW REQUIRED )
 
 include_directories(${OpenCV_INCLUDE_DIR})
 include_directories(${OpenGL_INCLUDE_DIR})
+include_directories(${GLEW_INCLUDE_DIRS})
 
 link_directories(${OpenCV_LIBRARY_DIR})
 link_directories(${OpenGL_LIBRARY_DIR})

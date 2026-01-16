@@ -10,7 +10,6 @@
 */
 
 // File includes:
-#include <windows.h>
 #include "GeometryTypes.hpp"
 
 Matrix44 Matrix44::getTransposed() const

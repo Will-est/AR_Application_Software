@@ -20,5 +20,6 @@ texture.hpp
 
 target_link_libraries( ARProject ${OpenCV_LIBRARIES} )
 target_link_libraries( ARProject ${OPENGL_LIBRARIES} )
+target_link_libraries( ARProject GLEW::GLEW )
      
 install (TARGETS ARProject DESTINATION bin)
