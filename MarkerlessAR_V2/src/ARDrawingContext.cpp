@@ -77,7 +77,7 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 	Texture=loadBMP_custom("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/preview.bmp");
 	
     // Load .dds file as texture (uvmap)
-    //Texture=loadDDS("C:/Users/ErArGe-5/Documents/Visual Studio 2013/Projects/ARProject/Debug/uvmap.dds");
+    //Texture=loadDDS("/../Artifacts/uvmap.dds");
 
     // load(parse) .obj file
 	res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Untitled.obj", vertices, uvs, normals);
