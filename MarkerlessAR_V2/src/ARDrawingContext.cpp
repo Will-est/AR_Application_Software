@@ -74,13 +74,14 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 	glCullFace(GL_FRONT);
 
 	// Load .bmp file as texture
-	Texture=loadBMP_custom("C:/Users/ErArGe-5/Documents/Visual Studio 2013/Projects/ARProject/Debug/preview.bmp");
+	// assumes this file is in src/ folder
+	Texture=loadBMP_custom("/../Artifacts/green_cube.bmp");
 	
     // Load .dds file as texture (uvmap)
-    //Texture=loadDDS("C:/Users/ErArGe-5/Documents/Visual Studio 2013/Projects/ARProject/Debug/uvmap.dds");
+    //Texture=loadDDS("/../Artifacts/uvmap.dds");
 
     // load(parse) .obj file
-	res = loadOBJ("C:/Users/ErArGe-5/Documents/Visual Studio 2013/Projects/ARProject/Debug/untitled.obj", vertices, uvs, normals);
+	res = loadOBJ("/../Artifacts/green_cube.obj", vertices, uvs, normals);
 
 	// Scale 3D Model
     scale3DModel(0.1f);
