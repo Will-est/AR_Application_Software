@@ -30,3 +30,12 @@
 *.exe
 *.out
 *.app
+
+# Everything that gets built
+MarkerlessAR_V1/build/
+MarkerlessAR_V2/build/
+
+# any random vscode stuff
+/.vscode/
+
+OPENCV_OPENGL_BUILD_STEPS.txt 
