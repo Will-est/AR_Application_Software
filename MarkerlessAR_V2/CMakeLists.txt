@@ -20,3 +20,10 @@ add_subdirectory(src)
 
 # installs the executable to the src folder in the project directory
 install(TARGETS ARProject DESTINATION ${ARProject_SOURCE_DIR}/src)
+
+# Automatically run install after build
+add_custom_target(install_after_build ALL
+    COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR}
+    DEPENDS ARProject
+    COMMENT "Installing ARProject after build"
+)
