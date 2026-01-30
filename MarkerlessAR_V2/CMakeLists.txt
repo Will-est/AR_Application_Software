@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 2.6)
 project(ARProject)
 
 # Set path to custom OpenCV build with OpenGL support
-set(OpenCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../opencv/build" CACHE PATH "Path to OpenCV build directory")
+set(OpenCV_DIR "/opt/opencv-3.4-opengl/share/OpenCV" CACHE PATH "Path to OpenCV build directory" FORCE)
 
 find_package(OpenCV REQUIRED )
 find_package(OpenGL REQUIRED )
