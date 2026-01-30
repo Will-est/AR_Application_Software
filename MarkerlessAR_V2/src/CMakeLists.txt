@@ -24,4 +24,5 @@ target_link_libraries( ARProject ${OpenCV_LIBRARIES} )
 target_link_libraries( ARProject ${OPENGL_LIBRARIES} )
 target_link_libraries( ARProject GLEW::GLEW )
      
-# install (TARGETS ARProject DESTINATION bin) # I don't nessecarily want it in bin folder
+# installs the executable to the src folder in the project directory
+install(TARGETS ARProject DESTINATION ${ARProject_SOURCE_DIR}/src)
