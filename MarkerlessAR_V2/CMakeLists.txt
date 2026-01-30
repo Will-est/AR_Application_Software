@@ -3,6 +3,8 @@ project(ARProject)
 
 # Set path to custom OpenCV build with OpenGL support
 set(OpenCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../opencv/build" CACHE PATH "Path to OpenCV build directory")
+# set(OpenCV_DIR "/opt/opencv/build" CACHE PATH "Path to OpenCV build directory")
+
 
 find_package(OpenCV REQUIRED )
 find_package(OpenGL REQUIRED )
