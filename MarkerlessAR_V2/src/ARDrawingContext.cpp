@@ -74,13 +74,13 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 	glCullFace(GL_FRONT);
 
 	// Load .bmp file as texture
-	Texture=loadBMP_custom("../Artifacts/uvmap.bmp");
+	Texture=loadBMP_custom("../Artifacts/green_cube.bmp");
 	
     // Load .dds file as texture (uvmap)
     //Texture=loadDDS("../Artifacts/uvmap.dds");
 
     // load(parse) .obj file
-	res = loadOBJ("../Artifacts/Untitled.obj", vertices, uvs, normals);
+	res = loadOBJ("../Artifacts/green_cube.obj", vertices, uvs, normals);
 
 	// Scale 3D Model
     scale3DModel(0.1f);
