@@ -74,13 +74,13 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 	glCullFace(GL_FRONT);
 
 	// Load .bmp file as texture
-	Texture=loadBMP_custom("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/preview.bmp");
+	Texture=loadBMP_custom("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.bmp");
 	
     // Load .dds file as texture (uvmap)
     //Texture=loadDDS("/../Artifacts/uvmap.dds");
 
     // load(parse) .obj file
-	res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Untitled.obj", vertices, uvs, normals);
+	res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/testcube.obj", vertices, uvs, normals);
 
 	// Scale 3D Model
     scale3DModel(0.1f);
