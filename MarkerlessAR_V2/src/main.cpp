@@ -19,6 +19,10 @@
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
+#define CAMERA_INDEX 0
+#define CAM_WIDTH  640
+#define CAM_HEIGHT 480
+
 
 /**
  * Processes a recorded video or live view from web-camera and allows you to adjust homography refinement and 
@@ -62,8 +66,34 @@ int main(int argc, const char * argv[])
 
     if (argc == 2)
     {
-		cv::VideoCapture cap = cv::VideoCapture(0);
-		processVideo(patternImage, calibration, cap);        
+        cv::VideoCapture cap;
+
+        // Open camera explicitly
+        cap.open(CAMERA_INDEX, cv::CAP_V4L2);
+        if (!cap.isOpened())
+        {
+            std::cerr << "Failed to open camera" << std::endl;
+            return 1;
+        }
+
+        //  Set format BEFORE first frame is grabbed
+        cap.set(cv::CAP_PROP_FRAME_WIDTH,  CAM_WIDTH);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT);
+
+        // Prefer MJPEG (huge for USB stability)
+        cap.set(cv::CAP_PROP_FOURCC,
+                cv::VideoWriter::fourcc('M','J','P','G'));
+
+        // Optional: set FPS
+        cap.set(cv::CAP_PROP_FPS, 30);
+
+        // Confirm what you actually got
+        std::cout << "Camera opened at "
+                << cap.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
+                << cap.get(cv::CAP_PROP_FRAME_HEIGHT)
+                << std::endl;
+
+        processVideo(patternImage, calibration, cap);    
     }
     else if (argc == 3)
     {
