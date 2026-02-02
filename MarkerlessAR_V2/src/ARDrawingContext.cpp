@@ -255,7 +255,7 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
     InitBackgroundQuadOnce();
 
     // Keep your model loads (but drawing is disabled until we port it to GLES)
-    Texture = loadBMP_custom("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.bmp");
+    Texture = loadBMP_custom("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/green_cube.bmp");
     res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.obj", vertices, uvs, normals);
 
     // scale3DModel(0.1f);  // ok to keep if you want
