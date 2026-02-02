@@ -20,6 +20,9 @@ texture.hpp
 
 set_target_properties(ARProject PROPERTIES OUTPUT_NAME "ARProject.out")
 
+# Enable debug visualization
+target_compile_definitions(ARProject PRIVATE _DEBUG=1)
+
 target_link_libraries( ARProject ${OpenCV_LIBRARIES} )
 target_link_libraries( ARProject ${OPENGL_LIBRARIES} )
 target_link_libraries( ARProject GLEW::GLEW )
