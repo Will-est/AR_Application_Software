@@ -80,7 +80,7 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
     //Texture=loadDDS("/../Artifacts/uvmap.dds");
 
     // load(parse) .obj file
-	res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/testcube.obj", vertices, uvs, normals);
+	res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.obj", vertices, uvs, normals);
 
 	// Scale 3D Model
     scale3DModel(0.1f);
