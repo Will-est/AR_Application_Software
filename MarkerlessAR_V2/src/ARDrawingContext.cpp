@@ -41,6 +41,16 @@ glm::vec2 b;
 
 GLuint Texture;
 
+static void PrintGLError(const char* where)
+{
+	GLenum err = glGetError();
+	if (err != GL_NO_ERROR)
+	{
+		printf("GL error at %s: %u\n", where, (unsigned)err);
+		fflush(stdout);
+	}
+}
+
 void ARDrawingContextDrawCallback(void* param)
 {
 	ARDrawingContext * ctx = static_cast<ARDrawingContext*>(param);
@@ -64,30 +74,33 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 	// Initialize OpenGL draw callback:
 	cv::setOpenGlContext(windowName);
 	cv::setOpenGlDrawCallback(windowName, ARDrawingContextDrawCallback, this);
-	
+
 	glewExperimental = true; // Needed for core profile
 	if (glewInit() != GLEW_OK) {
 		fprintf(stderr, "Failed to initialize GLEW\n");
 	}
-	
+
+	// Print GL info so we know what context we actually got
+	const GLubyte* ver = glGetString(GL_VERSION);
+	const GLubyte* ren = glGetString(GL_RENDERER);
+	const GLubyte* ven = glGetString(GL_VENDOR);
+	printf("GL_VERSION:  %s\n", ver ? (const char*)ver : "(null)");
+	printf("GL_RENDERER: %s\n", ren ? (const char*)ren : "(null)");
+	printf("GL_VENDOR:   %s\n", ven ? (const char*)ven : "(null)");
+	fflush(stdout);
+
+	// Keep culling for your 3D model if you want, but we will DISABLE it for background quad
 	glEnable(GL_CULL_FACE);
-	glCullFace(GL_FRONT);
+	glCullFace(GL_BACK);
 
 	// Load .bmp file as texture
-	Texture=loadBMP_custom("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.bmp");
-	
-    // Load .dds file as texture (uvmap)
-    //Texture=loadDDS("/../Artifacts/uvmap.dds");
+	Texture = loadBMP_custom("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.bmp");
 
-    // load(parse) .obj file
+	// load(parse) .obj file
 	res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.obj", vertices, uvs, normals);
 
 	// Scale 3D Model
-    scale3DModel(0.1f);
-
-	// Analyze size of the vertices and uvs
-	/*std::cout << vertices.size();
-	std::cout <<uvs.size();*/
+	scale3DModel(0.1f);
 }
 
 ARDrawingContext::~ARDrawingContext()
@@ -97,6 +110,7 @@ ARDrawingContext::~ARDrawingContext()
 
 void ARDrawingContext::updateBackground(const cv::Mat& frame)
 {
+	// Store latest frame (OpenCV is usually BGR)
 	frame.copyTo(m_backgroundImage);
 }
 
@@ -107,14 +121,33 @@ void ARDrawingContext::updateWindow()
 
 void ARDrawingContext::draw()
 {
-	glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT); // Clear entire screen:
-	drawCameraFrame();                                  // Render background
-	drawAugmentedScene();                               // Draw AR
+	static int c = 0;
+	if ((c++ % 120) == 0)
+	{
+		printf("draw() running | bg empty=%d size=%dx%d ch=%d continuous=%d\n",
+			m_backgroundImage.empty(),
+			m_backgroundImage.cols, m_backgroundImage.rows,
+			m_backgroundImage.empty() ? 0 : m_backgroundImage.channels(),
+			m_backgroundImage.empty() ? 0 : (int)m_backgroundImage.isContinuous());
+		fflush(stdout);
+	}
+
+	// Clear entire screen
+	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+	glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+
+	drawCameraFrame();    // Render background
+	drawAugmentedScene(); // Draw AR overlay
+
+	PrintGLError("end of draw()");
 	glFlush();
 }
 
 void ARDrawingContext::drawCameraFrame()
 {
+	if (m_backgroundImage.empty())
+		return;
+
 	// Initialize texture for background image
 	if (!m_isTextureInitialized)
 	{
@@ -127,23 +160,56 @@ void ARDrawingContext::drawCameraFrame()
 		m_isTextureInitialized = true;
 	}
 
-	int w = m_backgroundImage.cols;
-	int h = m_backgroundImage.rows;
-	
-	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+	const int w = m_backgroundImage.cols;
+	const int h = m_backgroundImage.rows;
+
+	// Upload pixels TO OpenGL => UNPACK
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
 	glBindTexture(GL_TEXTURE_2D, m_backgroundTextureId);
 
-	// Upload new texture data:
+	// Avoid GL_BGR_EXT on embedded stacks: convert to RGB/RGBA and upload as GL_RGB/GL_RGBA
 	if (m_backgroundImage.channels() == 3)
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_BGR_EXT, GL_UNSIGNED_BYTE, m_backgroundImage.data);
-	else if (m_backgroundImage.channels() == 4)
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, m_backgroundImage.data);
-	else if (m_backgroundImage.channels() == 1)
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, m_backgroundImage.data);
+	{
+		cv::Mat rgb;
+		cv::cvtColor(m_backgroundImage, rgb, cv::COLOR_BGR2RGB);
+		if (!rgb.isContinuous()) rgb = rgb.clone();
 
-	const GLfloat bgTextureVertices[] = { 0, 0, w, 0, 0, h, w, h };
-	const GLfloat bgTextureCoords[] = { 1, 0, 1, 1, 0, 0, 0, 1 };
-	const GLfloat proj[] = { 0, -2.f / w, 0, 0, -2.f / h, 0, 0, 0, 0, 0, 1, 0, 1, 1, 0, 1 };
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, rgb.data);
+	}
+	else if (m_backgroundImage.channels() == 4)
+	{
+		cv::Mat rgba;
+		cv::cvtColor(m_backgroundImage, rgba, cv::COLOR_BGRA2RGBA);
+		if (!rgba.isContinuous()) rgba = rgba.clone();
+
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data);
+	}
+	else if (m_backgroundImage.channels() == 1)
+	{
+		cv::Mat gray = m_backgroundImage;
+		if (!gray.isContinuous()) gray = gray.clone();
+
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, w, h, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, gray.data);
+	}
+
+	PrintGLError("after glTexImage2D (background)");
+	// If upload failed, don’t try to draw quad
+	if (glGetError() != GL_NO_ERROR)
+		return;
+
+	// Draw full-screen textured quad using fixed function pipeline
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_DEPTH_TEST);
+
+	const GLfloat bgTextureVertices[] = { 0, 0, (GLfloat)w, 0, 0, (GLfloat)h, (GLfloat)w, (GLfloat)h };
+	const GLfloat bgTextureCoords[]   = { 1, 0, 1, 1, 0, 0, 0, 1 };
+	const GLfloat proj[] = {
+		0, -2.f / w, 0, 0,
+		-2.f / h, 0, 0, 0,
+		0, 0, 1, 0,
+		1, 1, 0, 1
+	};
 
 	glMatrixMode(GL_PROJECTION);
 	glLoadMatrixf(proj);
@@ -154,7 +220,6 @@ void ARDrawingContext::drawCameraFrame()
 	glEnable(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, m_backgroundTextureId);
 
-	// Update attribute values.
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 
@@ -166,17 +231,26 @@ void ARDrawingContext::drawCameraFrame()
 
 	glDisableClientState(GL_VERTEX_ARRAY);
 	glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+
 	glDisable(GL_TEXTURE_2D);
+
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_CULL_FACE);
+
+	PrintGLError("end of drawCameraFrame()");
 }
 
 void ARDrawingContext::drawAugmentedScene()
 {
+	if (m_backgroundImage.empty())
+		return;
+
 	// Init augmentation projection
 	Matrix44 projectionMatrix;
-	
+
 	int w = m_backgroundImage.cols;
 	int h = m_backgroundImage.rows;
-	
+
 	buildProjectionMatrix(m_calibration, w, h, projectionMatrix);
 
 	glMatrixMode(GL_PROJECTION);
@@ -192,7 +266,7 @@ void ARDrawingContext::drawAugmentedScene()
 		glLoadMatrixf(reinterpret_cast<const GLfloat*>(&glMatrix.data[0]));
 
 		// Render model
-		//drawCoordinateAxis();
+		// drawCoordinateAxis();
 		draw3DModel();
 	}
 }
@@ -203,10 +277,10 @@ void ARDrawingContext::buildProjectionMatrix(const CameraCalibration& calibratio
 	float farPlane = 100.0f;  // Far clipping distance
 
 	// Camera parameters
-	float f_x = calibration.fx(); // Focal length in x axis
-	float f_y = calibration.fy(); // Focal length in y axis (usually the same?)
-	float c_x = calibration.cx(); // Camera primary point x
-	float c_y = calibration.cy(); // Camera primary point y
+	float f_x = calibration.fx();
+	float f_y = calibration.fy();
+	float c_x = calibration.cx();
+	float c_y = calibration.cy();
 
 	projectionMatrix.data[0] = -2.0f * f_x / screen_width;
 	projectionMatrix.data[1] = 0.0f;
@@ -256,40 +330,41 @@ void ARDrawingContext::drawCoordinateAxis()
 
 void ARDrawingContext::draw3DModel()
 {
-		
-	glEnable(GL_TEXTURE_2D);	
+	glEnable(GL_TEXTURE_2D);
 	glBindTexture(GL_TEXTURE_2D, Texture);
 
-	//glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 	glBegin(GL_TRIANGLES);
-	
-	for (int i = 0; i < vertices.size(); i += 1)
+
+	for (int i = 0; i < (int)vertices.size(); i += 1)
 	{
 		a = vertices[i];
 		b = uvs[i];
 		glNormal3f(a.x, a.y, a.z);
 		glTexCoord2d(b.x, b.y);
-		glVertex3f(a.x, a.y, a.z);		
+		glVertex3f(a.x, a.y, a.z);
 	}
 
-	glEnd();//end drawing of line loop
+	glEnd();
 	glDisable(GL_TEXTURE_2D);
+
+	PrintGLError("end of draw3DModel()");
 }
 
 void ARDrawingContext::scale3DModel(float scaleFactor)
 {
-	for (int i = 0; i < vertices.size(); i += 1)
+	for (int i = 0; i < (int)vertices.size(); i += 1)
 	{
-		vertices[i] = vertices[i] * vec3(scaleFactor * 1.0f, scaleFactor * 1.0f, scaleFactor * 1.0f);
+		vertices[i] = vertices[i] * vec3(scaleFactor, scaleFactor, scaleFactor);
 	}
 
-	for (int i = 0; i < normals.size(); i += 1)
+	for (int i = 0; i < (int)normals.size(); i += 1)
 	{
-		normals[i] = normals[i] * vec3(scaleFactor * 1.0f, scaleFactor * 1.0f, scaleFactor * 1.0f);
+		normals[i] = normals[i] * vec3(scaleFactor, scaleFactor, scaleFactor);
 	}
 
-	for (int i = 0; i < uvs.size(); i += 1)
+	// NOTE: scaling UVs is unusual. Keep if you intentionally want it.
+	for (int i = 0; i < (int)uvs.size(); i += 1)
 	{
-		uvs[i] = uvs[i] * vec2(scaleFactor * 1.0f, scaleFactor * 1.0f);
+		uvs[i] = uvs[i] * vec2(scaleFactor, scaleFactor);
 	}
 }
