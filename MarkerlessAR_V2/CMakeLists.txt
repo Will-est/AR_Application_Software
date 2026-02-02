@@ -5,15 +5,15 @@ project(ARProject)
 set(CMAKE_BUILD_TYPE Debug)
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 
-# # Set RPATH so executable can find OpenCV libraries at runtime
-# set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
-# set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
-# set(CMAKE_INSTALL_RPATH "/opt/opencv/build/lib")
+# Set RPATH so executable can find OpenCV libraries at runtime
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_INSTALL_RPATH "${CMAKE_CURRENT_SOURCE_DIR}/../opencv/build/lib")
 
 # Set path to custom OpenCV build with OpenGL support
-# set(OpenCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../opencv/build" CACHE PATH "Path to OpenCV build directory")
+set(OpenCV_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../opencv/build" CACHE PATH "Path to OpenCV build directory")
 # set(OpenCV_DIR "/opt/opencv/build" CACHE PATH "Path to OpenCV build directory")
-set(OpenCV_DIR "/opt/opencv-3.4-opengl/share/OpenCV" CACHE PATH "Path to OpenCV build directory" FORCE)
+# set(OpenCV_DIR "/opt/opencv-3.4-opengl/share/OpenCV" CACHE PATH "Path to OpenCV build directory" FORCE)
 
 find_package(OpenCV REQUIRED )
 find_package(OpenGL REQUIRED )
