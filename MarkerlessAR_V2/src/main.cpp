@@ -172,24 +172,31 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
     cv::Mat img = cameraFrame.clone();
 
     // Draw information:
-    if (pipeline.m_patternDetector.enableHomographyRefinement)
-        cv::putText(img, "Pose refinement: On   ('h' to switch off)", cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
-    else
-        cv::putText(img, "Pose refinement: Off  ('h' to switch on)",  cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
+    // COMMENTED OUT: Overlay text disabled for homography testing
+    // if (pipeline.m_patternDetector.enableHomographyRefinement)
+    //     cv::putText(img, "Pose refinement: On   ('h' to switch off)", cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
+    // else
+    //     cv::putText(img, "Pose refinement: Off  ('h' to switch on)",  cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
 
-    cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
+    // cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
 
-    cv::Mat rgb;
-    cv::cvtColor(img, rgb, cv::COLOR_BGR2RGB);
-
-    // Set a new camera frame:
-    drawingCtx.updateBackground(rgb);
-
+    
     // Find a pattern and update it's detection status:
     drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);
 
     // Update a pattern pose:
     drawingCtx.patternPose = pipeline.getPatternLocation();
+
+    // Draw homography contour on the background image in Debug builds
+#if _DEBUG
+    if (drawingCtx.isPatternPresent)
+    {
+        pipeline.getPatternInfo().draw2dContour(img, CV_RGB(0,200,0));
+    }
+#endif
+
+    // Set a new camera frame:
+    drawingCtx.updateBackground(img);
 
     // Request redraw of the window:
     drawingCtx.updateWindow();

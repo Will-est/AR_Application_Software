@@ -20,6 +20,13 @@ texture.hpp
 
 set_target_properties(ARProject PROPERTIES OUTPUT_NAME "ARProject.out")
 
+# Ensure debug visualizations are enabled when building in Debug
+# Define _DEBUG for Debug configuration so the code guarded with
+# #if _DEBUG will be compiled on Linux/gcc as well.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+	add_definitions(-D_DEBUG)
+endif()
+
 target_link_libraries( ARProject ${OpenCV_LIBRARIES} )
 target_link_libraries( ARProject ${OPENGL_LIBRARIES} )
 target_link_libraries( ARProject GLEW::GLEW )

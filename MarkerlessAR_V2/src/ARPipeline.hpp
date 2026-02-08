@@ -25,6 +25,7 @@ public:
   bool processFrame(const cv::Mat& inputFrame);
 
   const Transformation& getPatternLocation() const;
+  const PatternTrackingInfo& getPatternInfo() const;
 
   PatternDetector     m_patternDetector;
 private:
