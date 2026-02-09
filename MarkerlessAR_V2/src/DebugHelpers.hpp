@@ -44,6 +44,24 @@ namespace cv
             matches.resize(maxMatchesDrawn);
         }
 
+        // Drop matches that reference out-of-range keypoints to avoid drawMatches assertions.
+        if (!matches.empty())
+        {
+            std::vector<cv::DMatch> filtered;
+            filtered.reserve(matches.size());
+            for (size_t i = 0; i < matches.size(); ++i)
+            {
+                const cv::DMatch& m = matches[i];
+                if (m.queryIdx >= 0 && m.trainIdx >= 0 &&
+                    m.queryIdx < static_cast<int>(queryKp.size()) &&
+                    m.trainIdx < static_cast<int>(trainKp.size()))
+                {
+                    filtered.push_back(m);
+                }
+            }
+            matches.swap(filtered);
+        }
+
         cv::drawMatches
             (
             query, 

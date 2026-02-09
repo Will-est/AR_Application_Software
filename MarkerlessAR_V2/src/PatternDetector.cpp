@@ -226,6 +226,10 @@ void PatternDetector::getMatches(const cv::Mat& queryDescriptors, std::vector<cv
 
         for (size_t i=0; i<m_knnMatches.size(); i++)
         {
+            // Some descriptors may have fewer than 2 neighbors; skip those to avoid invalid indices.
+            if (m_knnMatches[i].size() < 2)
+                continue;
+
             const cv::DMatch& bestMatch   = m_knnMatches[i][0];
             const cv::DMatch& betterMatch = m_knnMatches[i][1];
 
