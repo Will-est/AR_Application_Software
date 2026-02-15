@@ -18,6 +18,7 @@
 
 // Standard includes:
 #include <opencv2/opencv.hpp>
+#include <vector>
 
 void ARDrawingContextDrawCallback(void* param);
 
@@ -35,6 +36,18 @@ public:
   //! Set the new frame for the background
   void updateBackground(const cv::Mat& frame);
 
+  //! Set/replace image overlay (supports 3-channel BGR or 4-channel BGRA).
+  //! If no alpha channel is present, one will be synthesized.
+  void setOverlayImage(const cv::Mat& overlayImage);
+
+  //! Enable or disable overlay compositing.
+  //! When disabled, only the camera background is rendered.
+  void setOverlayEnabled(bool enabled);
+
+  //! Update whether a pattern is present and where its 2D corners are in the frame.
+  //! The corner order is expected to be pattern points [0..3] from the detector.
+  void setPatternOverlayState(bool patternPresent, const std::vector<cv::Point2f>& patternQuad);
+
   void updateWindow();
 
 private:
@@ -42,29 +55,19 @@ private:
     //! Render entire scene in the OpenGl window
     void draw();
 
-  //! Draws the background with video
-  void drawCameraFrame();
-
-  //! Draws the AR
-  void drawAugmentedScene();
-
-  //! Builds the right projection matrix from the camera calibration for AR
-  void buildProjectionMatrix(const CameraCalibration& calibration, int w, int h, Matrix44& result);
-  
-  //! Draws the coordinate axis 
-  void drawCoordinateAxis();
-
-  //! Draw the 3d model
-  void draw3DModel();
-
-  //! Scale 3D Model
-  void scale3DModel(float scaleFactor);
-
 private:
   bool               m_isTextureInitialized;
   unsigned int       m_backgroundTextureId;
   CameraCalibration  m_calibration;
   cv::Mat            m_backgroundImage;
+  //! Overlay source image stored as BGRA for alpha compositing.
+  cv::Mat            m_overlayImage;
+  //! Global switch for overlay compositing.
+  bool               m_overlayEnabled;
+  //! Per-frame pattern detection status consumed by the renderer.
+  bool               m_overlayPatternPresent;
+  //! Per-frame 2D image-space pattern corners used for homography warp.
+  std::vector<cv::Point2f> m_overlayPatternQuad;
   std::string        m_windowName;
 };
 

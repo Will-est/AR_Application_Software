@@ -16,6 +16,7 @@
 
 // Standard includes:
 #include <opencv2/opencv.hpp>
+#include <cstdlib>
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
@@ -43,6 +44,8 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
  * Returns true if processing loop should be stopped; otherwise - false.
  */
 bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx);
+
+static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
 int main(int argc, const char * argv[])
 {
@@ -138,6 +141,8 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
     ARPipeline pipeline(patternImage, calibration);
     ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
+    // Load optional overlay image once and keep it in rendering context.
+    configureImageOverlay(drawingCtx);
 
     bool shouldQuit = false;
     do
@@ -158,6 +163,8 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     cv::Size frameSize(image.cols, image.rows);
     ARPipeline pipeline(patternImage, calibration);
     ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
+    // Load optional overlay image once and keep it in rendering context.
+    configureImageOverlay(drawingCtx);
 
     bool shouldQuit = false;
     do
@@ -178,22 +185,20 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
     // else
     //     cv::putText(img, "Pose refinement: Off  ('h' to switch on)",  cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
 
-    // cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
+    cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
 
-    
     // Find a pattern and update it's detection status:
     drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);
 
     // Update a pattern pose:
     drawingCtx.patternPose = pipeline.getPatternLocation();
 
-    // Draw homography contour on the background image in Debug builds
-#if _DEBUG
+    // Update 2D pattern corners for pattern-locked image overlay.
+    // This uses existing detector output and does not alter detection behavior.
     if (drawingCtx.isPatternPresent)
-    {
-        pipeline.getPatternInfo().draw2dContour(img, CV_RGB(0,200,0));
-    }
-#endif
+        drawingCtx.setPatternOverlayState(true, pipeline.getPatternInfo().points2d);
+    else
+        drawingCtx.setPatternOverlayState(false, std::vector<cv::Point2f>());
 
     // Set a new camera frame:
     drawingCtx.updateBackground(img);
@@ -225,4 +230,27 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
     }
 
     return shouldQuit;
+}
+
+static void configureImageOverlay(ARDrawingContext& drawingCtx)
+{
+    // The environment variable takes precedence over the default in-repo path.
+    const char* overlayPath = std::getenv("AR_OVERLAY_IMAGE");
+    std::string resolvedPath = overlayPath ? overlayPath : "Artifacts/overlay.png";
+
+    // IMREAD_UNCHANGED preserves alpha channel for proper compositing.
+    cv::Mat overlay = cv::imread(resolvedPath, cv::IMREAD_UNCHANGED);
+    if (overlay.empty())
+    {
+        if (overlayPath)
+        {
+            std::cerr << "Overlay image could not be loaded from AR_OVERLAY_IMAGE: "
+                      << resolvedPath << std::endl;
+        }
+        return;
+    }
+
+    drawingCtx.setOverlayImage(overlay);
+    drawingCtx.setOverlayEnabled(true);
+    std::cout << "Image overlay enabled: " << resolvedPath << std::endl;
 }
