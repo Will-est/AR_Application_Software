@@ -17,12 +17,32 @@
 // Standard includes:
 #include <opencv2/opencv.hpp>
 #include <cstdlib>
+#include <chrono>
+#include <thread>
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
 #define CAMERA_INDEX 0
 #define CAM_WIDTH  640
 #define CAM_HEIGHT 480
+
+namespace
+{
+int getTargetFps()
+{
+    // Keep default smoothness while avoiding busy render loops.
+    int fps = 30;
+    const char* rawFps = std::getenv("AR_TARGET_FPS");
+    if (rawFps)
+    {
+        int parsed = std::atoi(rawFps);
+        if (parsed > 0)
+            fps = parsed;
+    }
+
+    return max(1, min(120, fps));
+}
+}
 
 
 /**
@@ -144,6 +164,10 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     // Load optional overlay image once and keep it in rendering context.
     configureImageOverlay(drawingCtx);
 
+    using Clock = std::chrono::steady_clock;
+    const auto framePeriod = std::chrono::milliseconds(1000 / getTargetFps());
+    auto nextFrameDeadline = Clock::now();
+
     bool shouldQuit = false;
     do
     {
@@ -155,6 +179,15 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         }
 
         shouldQuit = processFrame(currentFrame, pipeline, drawingCtx);
+        if (!shouldQuit)
+        {
+            nextFrameDeadline += framePeriod;
+            const auto now = Clock::now();
+            if (now < nextFrameDeadline)
+                std::this_thread::sleep_until(nextFrameDeadline);
+            else
+                nextFrameDeadline = now;
+        }
     } while (!shouldQuit);
 }
 
@@ -166,10 +199,23 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     // Load optional overlay image once and keep it in rendering context.
     configureImageOverlay(drawingCtx);
 
+    using Clock = std::chrono::steady_clock;
+    const auto framePeriod = std::chrono::milliseconds(1000 / getTargetFps());
+    auto nextFrameDeadline = Clock::now();
+
     bool shouldQuit = false;
     do
     {
         shouldQuit = processFrame(image, pipeline, drawingCtx);
+        if (!shouldQuit)
+        {
+            nextFrameDeadline += framePeriod;
+            const auto now = Clock::now();
+            if (now < nextFrameDeadline)
+                std::this_thread::sleep_until(nextFrameDeadline);
+            else
+                nextFrameDeadline = now;
+        }
     } while (!shouldQuit);
 }
 
@@ -236,7 +282,9 @@ static void configureImageOverlay(ARDrawingContext& drawingCtx)
 {
     // The environment variable takes precedence over the default in-repo path.
     const char* overlayPath = std::getenv("AR_OVERLAY_IMAGE");
-    std::string resolvedPath = overlayPath ? overlayPath : "Artifacts/overlay.png";
+    std::string resolvedPath = overlayPath
+        ? overlayPath
+        : "/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/overlay.png";
 
     // IMREAD_UNCHANGED preserves alpha channel for proper compositing.
     cv::Mat overlay = cv::imread(resolvedPath, cv::IMREAD_UNCHANGED);

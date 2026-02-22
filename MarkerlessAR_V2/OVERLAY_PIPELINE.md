@@ -14,7 +14,7 @@ This document describes the rendering changes made for OpenGL ES compatibility a
 1. `main.cpp` creates `ARPipeline` and `ARDrawingContext`.
 2. `configureImageOverlay(...)` loads overlay image from:
    - `AR_OVERLAY_IMAGE` environment variable, or
-   - fallback `Artifacts/overlay.png`.
+   - fallback `/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/overlay.png`.
 3. `processFrame(...)` runs existing detector:
    - `drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);`
    - `drawingCtx.setPatternOverlayState(...)` with `pipeline.getPatternInfo().points2d`.
@@ -55,6 +55,7 @@ This document describes the rendering changes made for OpenGL ES compatibility a
   - Added `configureImageOverlay(...)`.
   - Calls `configureImageOverlay(...)` in both video and image modes.
   - Sends detector 2D corners to renderer via `setPatternOverlayState(...)`.
+  - Added frame pacing with `AR_TARGET_FPS` (default `30`, clamped `1..120`) to reduce busy-loop CPU usage.
 
 ## How To Use
 
@@ -66,6 +67,14 @@ export AR_OVERLAY_IMAGE=/absolute/path/to/overlay.png
 ```
 
 3. Run app as usual with required pattern image argument.
+
+4. Optional: tune render pacing for CPU usage:
+
+```bash
+export AR_TARGET_FPS=30
+```
+
+Lower values reduce CPU usage further (for example `24`), while higher values increase smoothness and CPU load.
 
 ## Behavior
 
@@ -79,3 +88,4 @@ export AR_OVERLAY_IMAGE=/absolute/path/to/overlay.png
 - Pattern detection/training/matching code was not modified.
 - Old fixed-function OpenGL rendering remains disabled in this path.
 - OBJ is currently loaded but not rendered in the GLES overlay path.
+- If logs show `GL_RENDERER: llvmpipe`, rendering is software-based and CPU usage will be high; frame pacing helps, but hardware GL acceleration has the largest impact.
