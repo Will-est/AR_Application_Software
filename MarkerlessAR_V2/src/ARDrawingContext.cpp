@@ -232,6 +232,8 @@ void ARDrawingContextDrawCallback(void* param)
 ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c)
     : m_isTextureInitialized(false)
     , m_calibration(c)
+    , m_overlayEnabled(false)
+    , m_overlayPatternPresent(false)
     , m_windowName(windowName)
 {
     cv::namedWindow(windowName, cv::WINDOW_OPENGL);
@@ -263,6 +265,45 @@ ARDrawingContext::~ARDrawingContext()
 void ARDrawingContext::updateBackground(const cv::Mat& frame)
 {
     frame.copyTo(m_backgroundImage);
+}
+
+void ARDrawingContext::setOverlayImage(const cv::Mat& overlayImage)
+{
+    if (overlayImage.empty())
+    {
+        m_overlayImage.release();
+        return;
+    }
+
+    if (overlayImage.channels() == 4)
+    {
+        overlayImage.copyTo(m_overlayImage);
+    }
+    else if (overlayImage.channels() == 3)
+    {
+        cv::cvtColor(overlayImage, m_overlayImage, cv::COLOR_BGR2BGRA);
+    }
+    else if (overlayImage.channels() == 1)
+    {
+        cv::cvtColor(overlayImage, m_overlayImage, cv::COLOR_GRAY2BGRA);
+    }
+    else
+    {
+        cv::Mat bgr;
+        overlayImage.convertTo(bgr, CV_8U);
+        cv::cvtColor(bgr, m_overlayImage, cv::COLOR_BGR2BGRA);
+    }
+}
+
+void ARDrawingContext::setOverlayEnabled(bool enabled)
+{
+    m_overlayEnabled = enabled && !m_overlayImage.empty();
+}
+
+void ARDrawingContext::setPatternOverlayState(bool patternPresent, const std::vector<cv::Point2f>& patternQuad)
+{
+    m_overlayPatternPresent = patternPresent;
+    m_overlayPatternQuad = patternQuad;
 }
 
 void ARDrawingContext::updateWindow()
