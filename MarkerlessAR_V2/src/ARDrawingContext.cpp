@@ -215,6 +215,83 @@ static void DrawBackgroundQuad(int w, int h)
     glUseProgram(0);
 }
 
+static void AlphaBlendBGRAOverBGR(const cv::Mat& overlayBGRA, cv::Mat& dstBGR)
+{
+    if (overlayBGRA.empty() || dstBGR.empty()) return;
+    if (overlayBGRA.size() != dstBGR.size()) return;
+    if (overlayBGRA.type() != CV_8UC4 || dstBGR.type() != CV_8UC3) return;
+
+    for (int y = 0; y < dstBGR.rows; ++y)
+    {
+        const cv::Vec4b* src = overlayBGRA.ptr<cv::Vec4b>(y);
+        cv::Vec3b* dst = dstBGR.ptr<cv::Vec3b>(y);
+        for (int x = 0; x < dstBGR.cols; ++x)
+        {
+            const unsigned int a = src[x][3];
+            if (a == 0) continue;
+            if (a == 255)
+            {
+                dst[x][0] = src[x][0];
+                dst[x][1] = src[x][1];
+                dst[x][2] = src[x][2];
+                continue;
+            }
+
+            const unsigned int invA = 255 - a;
+            dst[x][0] = static_cast<uchar>((src[x][0] * a + dst[x][0] * invA) / 255);
+            dst[x][1] = static_cast<uchar>((src[x][1] * a + dst[x][1] * invA) / 255);
+            dst[x][2] = static_cast<uchar>((src[x][2] * a + dst[x][2] * invA) / 255);
+        }
+    }
+}
+
+static bool CompositeOverlayOnPattern(const cv::Mat& overlayBGRA,
+                                      const std::vector<cv::Point2f>& dstQuad,
+                                      cv::Mat& frameBGR)
+{
+    if (overlayBGRA.empty() || frameBGR.empty()) return false;
+    if (overlayBGRA.type() != CV_8UC4 || frameBGR.type() != CV_8UC3) return false;
+    if (dstQuad.size() != 4) return false;
+
+    std::vector<cv::Point2f> srcQuad(4);
+    srcQuad[0] = cv::Point2f(0.0f, 0.0f);
+    srcQuad[1] = cv::Point2f(static_cast<float>(overlayBGRA.cols - 1), 0.0f);
+    srcQuad[2] = cv::Point2f(static_cast<float>(overlayBGRA.cols - 1), static_cast<float>(overlayBGRA.rows - 1));
+    srcQuad[3] = cv::Point2f(0.0f, static_cast<float>(overlayBGRA.rows - 1));
+
+    cv::Mat H = cv::getPerspectiveTransform(srcQuad, dstQuad);
+    if (H.empty()) return false;
+
+    cv::Mat warped(frameBGR.size(), CV_8UC4, cv::Scalar(0, 0, 0, 0));
+    cv::warpPerspective(overlayBGRA, warped, H, frameBGR.size(), cv::INTER_LINEAR, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0, 0));
+    AlphaBlendBGRAOverBGR(warped, frameBGR);
+    return true;
+}
+
+static void CompositeOverlayOnCorner(const cv::Mat& overlayBGRA, cv::Mat& frameBGR)
+{
+    if (overlayBGRA.empty() || frameBGR.empty()) return;
+    if (overlayBGRA.type() != CV_8UC4 || frameBGR.type() != CV_8UC3) return;
+
+    const int maxWidth = std::max(1, frameBGR.cols / 4);
+    const float scale = std::min(1.0f, static_cast<float>(maxWidth) / static_cast<float>(overlayBGRA.cols));
+    const int w = std::max(1, static_cast<int>(overlayBGRA.cols * scale));
+    const int h = std::max(1, static_cast<int>(overlayBGRA.rows * scale));
+
+    cv::Mat resized;
+    cv::resize(overlayBGRA, resized, cv::Size(w, h), 0, 0, cv::INTER_AREA);
+
+    const int pad = 10;
+    const int x = std::min(pad, std::max(0, frameBGR.cols - w));
+    const int y = std::min(pad, std::max(0, frameBGR.rows - h));
+    cv::Rect roi(x, y, std::min(w, frameBGR.cols - x), std::min(h, frameBGR.rows - y));
+    if (roi.width <= 0 || roi.height <= 0) return;
+
+    cv::Mat croppedOverlay = resized(cv::Rect(0, 0, roi.width, roi.height));
+    cv::Mat dstROI = frameBGR(roi);
+    AlphaBlendBGRAOverBGR(croppedOverlay, dstROI);
+}
+
 // ---------- Your original globals (kept) ----------
 std::vector<glm::vec3> vertices;
 std::vector<glm::vec2> uvs;
@@ -318,7 +395,18 @@ void ARDrawingContext::draw()
 
     if (!m_backgroundImage.empty())
     {
-        UploadCameraFrameRGB(m_backgroundImage);
+        cv::Mat renderFrame = m_backgroundImage;
+        if (m_overlayEnabled && !m_overlayImage.empty())
+        {
+            renderFrame = m_backgroundImage.clone();
+            bool composited = false;
+            if (m_overlayPatternPresent)
+                composited = CompositeOverlayOnPattern(m_overlayImage, m_overlayPatternQuad, renderFrame);
+            if (!composited)
+                CompositeOverlayOnCorner(m_overlayImage, renderFrame);
+        }
+
+        UploadCameraFrameRGB(renderFrame);
         DrawBackgroundQuad(m_backgroundImage.cols, m_backgroundImage.rows);
     }
 
