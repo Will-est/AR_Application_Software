@@ -158,6 +158,7 @@ int main()
     }
 
     cv::Mat grayPattern;
+    cv::resize(patternImage, patternImage, cv::Size(640, 480));
     cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY);
 
     std::ofstream hexdumpFile(hexdumpPath.c_str());
