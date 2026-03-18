@@ -80,6 +80,66 @@ std::string resolvePatternHexdumpPath()
     return "/home/shreeya607/seniordesign/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern_hex.txt";
 }
 
+std::string resolvePatternHexdumpBeforePath()
+{
+    const char* envBeforePath = std::getenv("AR_PATTERN_HEX_BEFORE");
+    if (envBeforePath && *envBeforePath)
+        return envBeforePath;
+
+    return "/home/shreeya607/seniordesign/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern_before_hex.txt";
+}
+
+std::string resolvePatternHexdumpAfterPath()
+{
+    const char* envAfterPath = std::getenv("AR_PATTERN_HEX_AFTER");
+    if (envAfterPath && *envAfterPath)
+        return envAfterPath;
+
+    // Fall back to the original single grayscale hexdump path behavior.
+    return resolvePatternHexdumpPath();
+}
+
+void writeColorHexdump(std::ostream& output, const cv::Mat& colorImage)
+{
+    CV_Assert(colorImage.type() == CV_8UC3);
+
+    cv::Mat contiguous = colorImage.isContinuous() ? colorImage : colorImage.clone();
+    const unsigned char* bytes = contiguous.ptr<unsigned char>(0);
+    const size_t byteCount = contiguous.total() * contiguous.channels();
+
+    output << "Color image (BGR): " << contiguous.cols << "x" << contiguous.rows
+           << " (" << byteCount << " bytes)" << std::endl;
+
+    for (size_t offset = 0; offset < byteCount; offset += 16)
+    {
+        output << std::setfill('0') << std::setw(8) << std::hex << offset << "  ";
+
+        for (size_t index = 0; index < 16; ++index)
+        {
+            if (offset + index < byteCount)
+            {
+                const unsigned int value = bytes[offset + index];
+                output << std::setw(2) << value << ' ';
+            }
+            else
+            {
+                output << "   ";
+            }
+        }
+
+        output << " ";
+        for (size_t index = 0; index < 16 && offset + index < byteCount; ++index)
+        {
+            const unsigned char value = bytes[offset + index];
+            output << (std::isprint(value) ? static_cast<char>(value) : '.');
+        }
+
+        output << std::endl;
+    }
+
+    output << std::dec << std::setfill(' ');
+}
+
 void writeHexdump(std::ostream& output, const cv::Mat& grayImage)
 {
     CV_Assert(grayImage.type() == CV_8UC1);
@@ -124,14 +184,14 @@ void writeHexdump(std::ostream& output, const cv::Mat& grayImage)
 
 
 /**
- * Processes a recorded video or live view from web-camera and allows you to adjust homography refinement and 
+ * Processes a recorded video or live view from web-camera and allows you to adjust homography refinement and
  * reprojection threshold in runtime.
  */
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture);
 
 /**
  * Processes single image. The processing goes in a loop.
- * It allows you to control the detection process by adjusting homography refinement switch and 
+ * It allows you to control the detection process by adjusting homography refinement switch and
  * reprojection threshold in runtime.
  */
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image);
@@ -149,7 +209,9 @@ static void configureImageOverlay(ARDrawingContext& drawingCtx);
 int main()
 {
     const std::string patternPath = resolvePatternImagePath();
-    const std::string hexdumpPath = resolvePatternHexdumpPath();
+    const std::string hexdumpBeforePath = resolvePatternHexdumpBeforePath();
+    const std::string hexdumpAfterPath = resolvePatternHexdumpAfterPath();
+
     cv::Mat patternImage = cv::imread(patternPath, cv::IMREAD_COLOR);
     if (patternImage.empty())
     {
@@ -157,20 +219,34 @@ int main()
         return 1;
     }
 
-    cv::Mat grayPattern;
     cv::resize(patternImage, patternImage, cv::Size(640, 480));
-    cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY);
 
-    std::ofstream hexdumpFile(hexdumpPath.c_str());
-    if (!hexdumpFile.is_open())
+    std::ofstream hexdumpBeforeFile(hexdumpBeforePath.c_str());
+    if (!hexdumpBeforeFile.is_open())
     {
-        std::cerr << "Could not open hexdump file for writing: " << hexdumpPath << std::endl;
+        std::cerr << "Could not open before-hexdump file for writing: "
+                  << hexdumpBeforePath << std::endl;
         return 1;
     }
 
     std::cout << "Loaded pattern image: " << patternPath << std::endl;
-    writeHexdump(hexdumpFile, grayPattern);
-    std::cout << "Wrote grayscale hexdump to: " << hexdumpPath << std::endl;
+    writeColorHexdump(hexdumpBeforeFile, patternImage);
+    std::cout << "Wrote color hexdump to: " << hexdumpBeforePath << std::endl;
+
+    cv::Mat grayPattern;
+    cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY);
+
+    std::ofstream hexdumpAfterFile(hexdumpAfterPath.c_str());
+    if (!hexdumpAfterFile.is_open())
+    {
+        std::cerr << "Could not open after-hexdump file for writing: "
+                  << hexdumpAfterPath << std::endl;
+        return 1;
+    }
+
+    writeHexdump(hexdumpAfterFile, grayPattern);
+    std::cout << "Wrote grayscale hexdump to: " << hexdumpAfterPath << std::endl;
+
     return 0;
 }
 #else
@@ -178,7 +254,7 @@ int main(int argc, const char * argv[])
 {
     // Change this calibration to yours:
     CameraCalibration calibration(526.58037684199849f, 524.65577209994706f, 318.41744018680112f, 202.96659047014398f);
-	
+
     if (argc < 2)
     {
         std::cout << "Input image not specified" << std::endl;
@@ -223,7 +299,7 @@ int main(int argc, const char * argv[])
                 << cap.get(cv::CAP_PROP_FRAME_HEIGHT)
                 << std::endl;
 
-        processVideo(patternImage, calibration, cap);    
+        processVideo(patternImage, calibration, cap);
     }
     else if (argc == 3)
     {
@@ -233,7 +309,7 @@ int main(int argc, const char * argv[])
         {
             processSingleImage(patternImage, calibration, testImage);
         }
-        else 
+        else
         {
             cv::VideoCapture cap;
             if (cap.open(input))
@@ -255,7 +331,7 @@ int main(int argc, const char * argv[])
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture)
 {
     // Grab first frame to get the frame dimensions
-    cv::Mat currentFrame;  
+    cv::Mat currentFrame;
     capture >> currentFrame;
 
     // Check the capture succeeded:
@@ -361,7 +437,7 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
     drawingCtx.updateWindow();
 
     // Read the keyboard input:
-    int keyCode = cv::waitKey(5); 
+    int keyCode = cv::waitKey(5);
 
     bool shouldQuit = false;
     if (keyCode == '+' || keyCode == '=')
