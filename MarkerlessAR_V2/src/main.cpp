@@ -18,6 +18,11 @@
 #include <opencv2/opencv.hpp>
 #include <cstdlib>
 #include <chrono>
+#include <cctype>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <string>
 #include <thread>
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
@@ -41,6 +46,79 @@ int getTargetFps()
     }
 
     return max(1, min(120, fps));
+}
+
+std::string resolvePatternImagePath()
+{
+    const char* envPatternPath = std::getenv("AR_PATTERN_IMAGE");
+    if (envPatternPath && *envPatternPath)
+        return envPatternPath;
+
+    const char* candidates[] = {
+        "pattern.png",
+        "../Artifacts/pattern.png",
+        "Artifacts/pattern.png",
+        "/home/shreeya607/seniordesign/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern.png"
+    };
+
+    for (const char* candidate : candidates)
+    {
+        cv::Mat image = cv::imread(candidate, cv::IMREAD_COLOR);
+        if (!image.empty())
+            return candidate;
+    }
+
+    return "Artifacts/pattern.png";
+}
+
+std::string resolvePatternHexdumpPath()
+{
+    const char* envHexdumpPath = std::getenv("AR_PATTERN_HEXDUMP");
+    if (envHexdumpPath && *envHexdumpPath)
+        return envHexdumpPath;
+
+    return "/home/shreeya607/seniordesign/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern_hex.txt";
+}
+
+void writeHexdump(std::ostream& output, const cv::Mat& grayImage)
+{
+    CV_Assert(grayImage.type() == CV_8UC1);
+
+    cv::Mat contiguous = grayImage.isContinuous() ? grayImage : grayImage.clone();
+    const unsigned char* bytes = contiguous.ptr<unsigned char>(0);
+    const size_t byteCount = contiguous.total();
+
+    output << "Grayscale image: " << contiguous.cols << "x" << contiguous.rows
+           << " (" << byteCount << " bytes)" << std::endl;
+
+    for (size_t offset = 0; offset < byteCount; offset += 16)
+    {
+        output << std::setfill('0') << std::setw(8) << std::hex << offset << "  ";
+
+        for (size_t index = 0; index < 16; ++index)
+        {
+            if (offset + index < byteCount)
+            {
+                const unsigned int value = bytes[offset + index];
+                output << std::setw(2) << value << ' ';
+            }
+            else
+            {
+                output << "   ";
+            }
+        }
+
+        output << " ";
+        for (size_t index = 0; index < 16 && offset + index < byteCount; ++index)
+        {
+            const unsigned char value = bytes[offset + index];
+            output << (std::isprint(value) ? static_cast<char>(value) : '.');
+        }
+
+        output << std::endl;
+    }
+
+    output << std::dec << std::setfill(' ');
 }
 }
 
@@ -67,6 +145,34 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
 
 static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
+#if 1
+int main()
+{
+    const std::string patternPath = resolvePatternImagePath();
+    const std::string hexdumpPath = resolvePatternHexdumpPath();
+    cv::Mat patternImage = cv::imread(patternPath, cv::IMREAD_COLOR);
+    if (patternImage.empty())
+    {
+        std::cerr << "Could not read pattern image: " << patternPath << std::endl;
+        return 1;
+    }
+
+    cv::Mat grayPattern;
+    cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY);
+
+    std::ofstream hexdumpFile(hexdumpPath.c_str());
+    if (!hexdumpFile.is_open())
+    {
+        std::cerr << "Could not open hexdump file for writing: " << hexdumpPath << std::endl;
+        return 1;
+    }
+
+    std::cout << "Loaded pattern image: " << patternPath << std::endl;
+    writeHexdump(hexdumpFile, grayPattern);
+    std::cout << "Wrote grayscale hexdump to: " << hexdumpPath << std::endl;
+    return 0;
+}
+#else
 int main(int argc, const char * argv[])
 {
     // Change this calibration to yours:
@@ -143,6 +249,7 @@ int main(int argc, const char * argv[])
 
     return 0;
 }
+#endif
 
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture)
 {
