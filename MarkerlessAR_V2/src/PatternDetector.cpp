@@ -12,7 +12,6 @@
 // File includes:
 #include "PatternDetector.hpp"
 #include "DebugHelpers.hpp"
-xd7
 // Standard includes:
 #include <cmath>
 #include <iterator>
