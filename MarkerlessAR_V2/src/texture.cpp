@@ -14,6 +14,8 @@
 #include <string.h>
 #include <GL/glew.h>
 
+// what you need -> UNCOMPRESSED 24 bit BMPs pink_cube.bmp = Bad
+
 GLuint loadBMP_custom(const char * imagepath){
 
 	printf("Reading image %s\n", imagepath);
