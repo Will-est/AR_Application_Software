@@ -234,7 +234,10 @@ int main()
     std::cout << "Wrote color hexdump to: " << hexdumpBeforePath << std::endl;
 
     cv::Mat grayPattern;
-    cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY);
+    cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY); // grayscale
+
+    cv::Mat blurredPattern;
+    cv::GaussianBlur(grayPattern, blurredPattern, cv::Size(5, 5), 0);
 
     std::ofstream hexdumpAfterFile(hexdumpAfterPath.c_str());
     if (!hexdumpAfterFile.is_open())
@@ -244,7 +247,7 @@ int main()
         return 1;
     }
 
-    writeHexdump(hexdumpAfterFile, grayPattern);
+    writeHexdump(hexdumpAfterFile, blurredPattern);
     std::cout << "Wrote grayscale hexdump to: " << hexdumpAfterPath << std::endl;
 
     return 0;
