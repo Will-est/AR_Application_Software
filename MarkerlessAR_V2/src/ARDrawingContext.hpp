@@ -25,7 +25,7 @@ void ARDrawingContextDrawCallback(void* param);
 class ARDrawingContext
 {
 public:
-  ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c);
+  ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c, bool enableDisplay = true);
   ~ARDrawingContext();
 
   
@@ -49,17 +49,22 @@ public:
   void setPatternOverlayState(bool patternPresent, const std::vector<cv::Point2f>& patternQuad);
 
   void updateWindow();
+  bool isDisplayEnabled() const;
+  const cv::Mat& getLastRenderedFrame() const;
 
 private:
     friend void ARDrawingContextDrawCallback(void* param);
     //! Render entire scene in the OpenGl window
     void draw();
+    cv::Mat composeFrame() const;
 
 private:
+  bool               m_displayEnabled;
   bool               m_isTextureInitialized;
   unsigned int       m_backgroundTextureId;
   CameraCalibration  m_calibration;
   cv::Mat            m_backgroundImage;
+  cv::Mat            m_lastRenderedFrame;
   //! Overlay source image stored as BGRA for alpha compositing.
   cv::Mat            m_overlayImage;
   //! Global switch for overlay compositing.

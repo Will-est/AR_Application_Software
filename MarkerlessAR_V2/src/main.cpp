@@ -1,6 +1,6 @@
 /*
 ---------------------------------------------------------------------
---- Author         : Ahmet Özlü
+--- Author         : Ahmet Ozlu
 --- Mail           : ahmetozlu93@gmail.com
 --- Date           : 1st August 2017
 --- Version        : 1.0
@@ -16,14 +16,24 @@
 
 // Standard includes:
 #include <opencv2/opencv.hpp>
-#include <cstdlib>
+#include <arpa/inet.h>
 #include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <cstring>
 #include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
+#include <netinet/in.h>
+#include <sstream>
 #include <string>
+#include <sys/socket.h>
 #include <thread>
+#include <unistd.h>
+#include <vector>
+
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
@@ -33,19 +43,289 @@
 
 namespace
 {
+bool parseEnvBool(const char* name, bool defaultValue)
+{
+    const char* raw = std::getenv(name);
+    if (!raw || !*raw)
+        return defaultValue;
+
+    const std::string value(raw);
+    return value == "1" || value == "true" || value == "TRUE" || value == "yes" || value == "YES";
+}
+
+int parseEnvInt(const char* name, int defaultValue, int minValue, int maxValue)
+{
+    const char* raw = std::getenv(name);
+    if (!raw || !*raw)
+        return defaultValue;
+
+    const int parsed = std::atoi(raw);
+    if (parsed < minValue || parsed > maxValue)
+        return defaultValue;
+
+    return parsed;
+}
+
+class MjpegHttpStreamer
+{
+public:
+    MjpegHttpStreamer()
+        : m_enabled(parseEnvBool("AR_STREAM_ENABLE", false))
+        , m_running(false)
+        , m_serverFd(-1)
+        , m_port(parseEnvInt("AR_STREAM_PORT", 5969, 1, 65535))
+        , m_bindAddress(resolveBindAddress())
+        , m_jpegQuality(parseEnvInt("AR_STREAM_JPEG_QUALITY", 80, 30, 100))
+        , m_frameSequence(0)
+    {
+    }
+
+    ~MjpegHttpStreamer()
+    {
+        stop();
+    }
+
+    bool enabled() const
+    {
+        return m_enabled;
+    }
+
+    bool start()
+    {
+        if (!m_enabled || m_running)
+            return true;
+
+        m_serverFd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (m_serverFd < 0)
+        {
+            std::cerr << "MJPEG streamer: could not create socket" << std::endl;
+            return false;
+        }
+
+        const int reuse = 1;
+        setsockopt(m_serverFd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+        sockaddr_in serverAddr;
+        std::memset(&serverAddr, 0, sizeof(serverAddr));
+        serverAddr.sin_family = AF_INET;
+        serverAddr.sin_port = htons(static_cast<uint16_t>(m_port));
+
+        if (::inet_pton(AF_INET, m_bindAddress.c_str(), &serverAddr.sin_addr) != 1)
+        {
+            std::cerr << "MJPEG streamer: invalid AR_STREAM_BIND_IPV4 value: "
+                      << m_bindAddress << std::endl;
+            ::close(m_serverFd);
+            m_serverFd = -1;
+            return false;
+        }
+
+        if (::bind(m_serverFd, reinterpret_cast<sockaddr*>(&serverAddr), sizeof(serverAddr)) < 0)
+        {
+            std::cerr << "MJPEG streamer: bind failed on " << m_bindAddress
+                      << ":" << m_port << std::endl;
+            ::close(m_serverFd);
+            m_serverFd = -1;
+            return false;
+        }
+
+        if (::listen(m_serverFd, 4) < 0)
+        {
+            std::cerr << "MJPEG streamer: listen failed" << std::endl;
+            ::close(m_serverFd);
+            m_serverFd = -1;
+            return false;
+        }
+
+        m_running = true;
+        m_serverThread = std::thread(&MjpegHttpStreamer::serverLoop, this);
+
+        std::cout << "MJPEG streamer listening on http://" << m_bindAddress
+                  << ":" << m_port << "/stream.mjpg" << std::endl;
+        return true;
+    }
+
+    void stop()
+    {
+        if (!m_running)
+            return;
+
+        m_running = false;
+        m_frameReady.notify_all();
+
+        if (m_serverFd >= 0)
+        {
+            ::shutdown(m_serverFd, SHUT_RDWR);
+            ::close(m_serverFd);
+            m_serverFd = -1;
+        }
+
+        if (m_serverThread.joinable())
+            m_serverThread.join();
+    }
+
+    void publishFrame(const cv::Mat& frame)
+    {
+        if (!m_running || frame.empty())
+            return;
+
+        std::vector<unsigned char> encoded;
+        std::vector<int> params;
+        params.push_back(cv::IMWRITE_JPEG_QUALITY);
+        params.push_back(m_jpegQuality);
+
+        if (!cv::imencode(".jpg", frame, encoded, params))
+            return;
+
+        {
+            std::lock_guard<std::mutex> lock(m_frameMutex);
+            m_latestFrame.swap(encoded);
+            ++m_frameSequence;
+        }
+
+        m_frameReady.notify_all();
+    }
+
+private:
+    static std::string resolveBindAddress()
+    {
+        const char* raw = std::getenv("AR_STREAM_BIND_IPV4");
+        if (!raw || !*raw)
+            return "0.0.0.0";
+        return raw;
+    }
+
+    void serverLoop()
+    {
+        while (m_running)
+        {
+            sockaddr_in clientAddr;
+            socklen_t clientLen = sizeof(clientAddr);
+            const int clientFd = ::accept(m_serverFd, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
+            if (clientFd < 0)
+            {
+                if (m_running)
+                    std::cerr << "MJPEG streamer: accept failed" << std::endl;
+                continue;
+            }
+
+            std::thread(&MjpegHttpStreamer::handleClient, this, clientFd).detach();
+        }
+    }
+
+    void handleClient(int clientFd)
+    {
+        std::string request(1024, '\0');
+        const ssize_t received = ::recv(clientFd, &request[0], request.size(), 0);
+        if (received <= 0)
+        {
+            ::close(clientFd);
+            return;
+        }
+
+        request.resize(static_cast<size_t>(received));
+        const bool wantsRoot = request.find("GET / ") == 0;
+        const bool wantsStream = request.find("GET /stream.mjpg ") == 0 || wantsRoot;
+
+        if (!wantsStream)
+        {
+            static const char kNotFound[] =
+                "HTTP/1.1 404 Not Found\r\n"
+                "Content-Type: text/plain\r\n"
+                "Connection: close\r\n\r\n"
+                "Not found\r\n";
+            sendAll(clientFd, kNotFound, sizeof(kNotFound) - 1);
+            ::close(clientFd);
+            return;
+        }
+
+        static const char kHeader[] =
+            "HTTP/1.1 200 OK\r\n"
+            "Cache-Control: no-cache\r\n"
+            "Pragma: no-cache\r\n"
+            "Connection: close\r\n"
+            "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
+
+        if (!sendAll(clientFd, kHeader, sizeof(kHeader) - 1))
+        {
+            ::close(clientFd);
+            return;
+        }
+
+        size_t lastSeenSequence = 0;
+        while (m_running)
+        {
+            std::vector<unsigned char> frame;
+            size_t currentSequence = 0;
+
+            {
+                std::unique_lock<std::mutex> lock(m_frameMutex);
+                m_frameReady.wait(lock, [this, lastSeenSequence] {
+                    return !m_running || (!m_latestFrame.empty() && m_frameSequence > lastSeenSequence);
+                });
+
+                if (!m_running)
+                    break;
+
+                frame = m_latestFrame;
+                currentSequence = m_frameSequence;
+            }
+
+            std::ostringstream partHeader;
+            partHeader << "--frame\r\n"
+                       << "Content-Type: image/jpeg\r\n"
+                       << "Content-Length: " << frame.size() << "\r\n\r\n";
+
+            const std::string header = partHeader.str();
+            if (!sendAll(clientFd, header.c_str(), header.size()) ||
+                !sendAll(clientFd, reinterpret_cast<const char*>(frame.data()), frame.size()) ||
+                !sendAll(clientFd, "\r\n", 2))
+            {
+                break;
+            }
+
+            lastSeenSequence = currentSequence;
+        }
+
+        ::close(clientFd);
+    }
+
+    static bool sendAll(int fd, const char* data, size_t size)
+    {
+        size_t totalSent = 0;
+        while (totalSent < size)
+        {
+            const ssize_t sent = ::send(fd, data + totalSent, size - totalSent, 0);
+            if (sent <= 0)
+                return false;
+            totalSent += static_cast<size_t>(sent);
+        }
+
+        return true;
+    }
+
+private:
+    bool m_enabled;
+    bool m_running;
+    int m_serverFd;
+    int m_port;
+    std::string m_bindAddress;
+    int m_jpegQuality;
+    std::thread m_serverThread;
+    std::mutex m_frameMutex;
+    std::condition_variable m_frameReady;
+    std::vector<unsigned char> m_latestFrame;
+    size_t m_frameSequence;
+};
+
 int getTargetFps()
 {
     // Keep default smoothness while avoiding busy render loops.
-    int fps = 30;
-    const char* rawFps = std::getenv("AR_TARGET_FPS");
-    if (rawFps)
-    {
-        int parsed = std::atoi(rawFps);
-        if (parsed > 0)
-            fps = parsed;
-    }
+    return parseEnvInt("AR_TARGET_FPS", 30, 1, 120);
+}
 
-    return max(1, min(120, fps));
+bool isHeadlessRequested()
+{
+    return parseEnvBool("AR_HEADLESS", false);
 }
 
 std::string resolvePatternImagePath()
@@ -95,7 +375,6 @@ std::string resolvePatternHexdumpAfterPath()
     if (envAfterPath && *envAfterPath)
         return envAfterPath;
 
-    // Fall back to the original single grayscale hexdump path behavior.
     return resolvePatternHexdumpPath();
 }
 
@@ -182,90 +461,70 @@ void writeHexdump(std::ostream& output, const cv::Mat& grayImage)
 }
 }
 
-
-/**
- * Processes a recorded video or live view from web-camera and allows you to adjust homography refinement and
- * reprojection threshold in runtime.
- */
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture);
-
-/**
- * Processes single image. The processing goes in a loop.
- * It allows you to control the detection process by adjusting homography refinement switch and
- * reprojection threshold in runtime.
- */
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image);
-
-/**
- * Performs full detection routine on camera frame and draws the scene using drawing context.
- * In addition, this function draw overlay with debug information on top of the AR window.
- * Returns true if processing loop should be stopped; otherwise - false.
- */
 bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx);
-
 static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
-#if 1
-int main()
-{
-    const std::string patternPath = resolvePatternImagePath();
-    const std::string hexdumpBeforePath = resolvePatternHexdumpBeforePath();
-    const std::string hexdumpAfterPath = resolvePatternHexdumpAfterPath();
-
-    cv::Mat patternImage = cv::imread(patternPath, cv::IMREAD_COLOR);
-    if (patternImage.empty())
-    {
-        std::cerr << "Could not read pattern image: " << patternPath << std::endl;
-        return 1;
-    }
-
-    cv::resize(patternImage, patternImage, cv::Size(640, 480));
-
-    std::ofstream hexdumpBeforeFile(hexdumpBeforePath.c_str());
-    if (!hexdumpBeforeFile.is_open())
-    {
-        std::cerr << "Could not open before-hexdump file for writing: "
-                  << hexdumpBeforePath << std::endl;
-        return 1;
-    }
-
-    std::cout << "Loaded pattern image: " << patternPath << std::endl;
-    writeColorHexdump(hexdumpBeforeFile, patternImage);
-    std::cout << "Wrote color hexdump to: " << hexdumpBeforePath << std::endl;
-
-    cv::Mat grayPattern;
-    cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY); // grayscale
-
-    cv::Mat blurredPattern;
-    cv::GaussianBlur(grayPattern, blurredPattern, cv::Size(5, 5), 0);
-
-    std::ofstream hexdumpAfterFile(hexdumpAfterPath.c_str());
-    if (!hexdumpAfterFile.is_open())
-    {
-        std::cerr << "Could not open after-hexdump file for writing: "
-                  << hexdumpAfterPath << std::endl;
-        return 1;
-    }
-
-    writeHexdump(hexdumpAfterFile, blurredPattern);
-    std::cout << "Wrote grayscale hexdump to: " << hexdumpAfterPath << std::endl;
-
-    return 0;
-}
-#else
 int main(int argc, const char * argv[])
 {
+    if (argc >= 2 && std::string(argv[1]) == "--write-pattern-hexdump")
+    {
+        const std::string patternPath = resolvePatternImagePath();
+        const std::string hexdumpBeforePath = resolvePatternHexdumpBeforePath();
+        const std::string hexdumpAfterPath = resolvePatternHexdumpAfterPath();
+
+        cv::Mat patternImage = cv::imread(patternPath, cv::IMREAD_COLOR);
+        if (patternImage.empty())
+        {
+            std::cerr << "Could not read pattern image: " << patternPath << std::endl;
+            return 1;
+        }
+
+        cv::resize(patternImage, patternImage, cv::Size(640, 480));
+
+        std::ofstream hexdumpBeforeFile(hexdumpBeforePath.c_str());
+        if (!hexdumpBeforeFile.is_open())
+        {
+            std::cerr << "Could not open before-hexdump file for writing: "
+                      << hexdumpBeforePath << std::endl;
+            return 1;
+        }
+
+        std::cout << "Loaded pattern image: " << patternPath << std::endl;
+        writeColorHexdump(hexdumpBeforeFile, patternImage);
+        std::cout << "Wrote color hexdump to: " << hexdumpBeforePath << std::endl;
+
+        cv::Mat grayPattern;
+        cv::cvtColor(patternImage, grayPattern, cv::COLOR_BGR2GRAY);
+
+        cv::Mat blurredPattern;
+        cv::GaussianBlur(grayPattern, blurredPattern, cv::Size(5, 5), 0);
+
+        std::ofstream hexdumpAfterFile(hexdumpAfterPath.c_str());
+        if (!hexdumpAfterFile.is_open())
+        {
+            std::cerr << "Could not open after-hexdump file for writing: "
+                      << hexdumpAfterPath << std::endl;
+            return 1;
+        }
+
+        writeHexdump(hexdumpAfterFile, blurredPattern);
+        std::cout << "Wrote grayscale hexdump to: " << hexdumpAfterPath << std::endl;
+        return 0;
+    }
+
     // Change this calibration to yours:
     CameraCalibration calibration(526.58037684199849f, 524.65577209994706f, 318.41744018680112f, 202.96659047014398f);
 
     if (argc < 2)
     {
         std::cout << "Input image not specified" << std::endl;
-        std::cout << "Usage: markerless_ar_demo <pattern image> [filepath to recorded video or image]" << std::endl;
+        std::cout << "Usage: ARProject.out <pattern image> [filepath to recorded video or image]" << std::endl;
+        std::cout << "       ARProject.out --write-pattern-hexdump" << std::endl;
         return 1;
     }
 
-    // Try to read the pattern:
     cv::Mat patternImage = cv::imread(argv[1]);
     if (patternImage.empty())
     {
@@ -276,8 +535,6 @@ int main(int argc, const char * argv[])
     if (argc == 2)
     {
         cv::VideoCapture cap;
-
-        // Open camera explicitly
         cap.open(CAMERA_INDEX, cv::CAP_V4L2);
         if (!cap.isOpened())
         {
@@ -285,22 +542,15 @@ int main(int argc, const char * argv[])
             return 1;
         }
 
-        //  Set format BEFORE first frame is grabbed
-        cap.set(cv::CAP_PROP_FRAME_WIDTH,  CAM_WIDTH);
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, CAM_WIDTH);
         cap.set(cv::CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT);
-
-        // Prefer MJPEG (huge for USB stability)
-        cap.set(cv::CAP_PROP_FOURCC,
-                cv::VideoWriter::fourcc('M','J','P','G'));
-
-        // Optional: set FPS
+        cap.set(cv::CAP_PROP_FOURCC, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'));
         cap.set(cv::CAP_PROP_FPS, 30);
 
-        // Confirm what you actually got
         std::cout << "Camera opened at "
-                << cap.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
-                << cap.get(cv::CAP_PROP_FRAME_HEIGHT)
-                << std::endl;
+                  << cap.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
+                  << cap.get(cv::CAP_PROP_FRAME_HEIGHT)
+                  << std::endl;
 
         processVideo(patternImage, calibration, cap);
     }
@@ -316,9 +566,7 @@ int main(int argc, const char * argv[])
         {
             cv::VideoCapture cap;
             if (cap.open(input))
-            {
                 processVideo(patternImage, calibration, cap);
-            }
         }
     }
     else
@@ -329,15 +577,12 @@ int main(int argc, const char * argv[])
 
     return 0;
 }
-#endif
 
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture)
 {
-    // Grab first frame to get the frame dimensions
     cv::Mat currentFrame;
     capture >> currentFrame;
 
-    // Check the capture succeeded:
     if (currentFrame.empty())
     {
         std::cout << "Cannot open video capture device" << std::endl;
@@ -347,8 +592,11 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Size frameSize(currentFrame.cols, currentFrame.rows);
 
     ARPipeline pipeline(patternImage, calibration);
-    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
-    // Load optional overlay image once and keep it in rendering context.
+    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration, !isHeadlessRequested());
+    MjpegHttpStreamer streamer;
+    if (streamer.enabled() && !streamer.start())
+        return;
+
     configureImageOverlay(drawingCtx);
 
     using Clock = std::chrono::steady_clock;
@@ -366,6 +614,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         }
 
         shouldQuit = processFrame(currentFrame, pipeline, drawingCtx);
+        if (streamer.enabled())
+            streamer.publishFrame(drawingCtx.getLastRenderedFrame());
+
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -382,8 +633,11 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
 {
     cv::Size frameSize(image.cols, image.rows);
     ARPipeline pipeline(patternImage, calibration);
-    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
-    // Load optional overlay image once and keep it in rendering context.
+    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration, !isHeadlessRequested());
+    MjpegHttpStreamer streamer;
+    if (streamer.enabled() && !streamer.start())
+        return;
+
     configureImageOverlay(drawingCtx);
 
     using Clock = std::chrono::steady_clock;
@@ -394,6 +648,9 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     do
     {
         shouldQuit = processFrame(image, pipeline, drawingCtx);
+        if (streamer.enabled())
+            streamer.publishFrame(drawingCtx.getLastRenderedFrame());
+
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -408,39 +665,29 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
 
 bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx)
 {
-    // Clone image used for background (we will draw overlay on it)
     cv::Mat img = cameraFrame.clone();
 
-    // Draw information:
-    // COMMENTED OUT: Overlay text disabled for homography testing
-    // if (pipeline.m_patternDetector.enableHomographyRefinement)
-    //     cv::putText(img, "Pose refinement: On   ('h' to switch off)", cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
-    // else
-    //     cv::putText(img, "Pose refinement: Off  ('h' to switch on)",  cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
+    cv::putText(img,
+                "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)",
+                cv::Point(10, 30),
+                cv::FONT_HERSHEY_PLAIN,
+                1,
+                CV_RGB(0, 200, 0));
 
-    cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
-
-    // Find a pattern and update it's detection status:
     drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);
-
-    // Update a pattern pose:
     drawingCtx.patternPose = pipeline.getPatternLocation();
 
-    // Update 2D pattern corners for pattern-locked image overlay.
-    // This uses existing detector output and does not alter detection behavior.
     if (drawingCtx.isPatternPresent)
         drawingCtx.setPatternOverlayState(true, pipeline.getPatternInfo().points2d);
     else
         drawingCtx.setPatternOverlayState(false, std::vector<cv::Point2f>());
 
-    // Set a new camera frame:
     drawingCtx.updateBackground(img);
-
-    // Request redraw of the window:
     drawingCtx.updateWindow();
 
-    // Read the keyboard input:
-    int keyCode = cv::waitKey(5);
+    int keyCode = -1;
+    if (drawingCtx.isDisplayEnabled())
+        keyCode = cv::waitKey(5);
 
     bool shouldQuit = false;
     if (keyCode == '+' || keyCode == '=')
@@ -467,13 +714,11 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
 
 static void configureImageOverlay(ARDrawingContext& drawingCtx)
 {
-    // The environment variable takes precedence over the default in-repo path.
     const char* overlayPath = std::getenv("AR_OVERLAY_IMAGE");
     std::string resolvedPath = overlayPath
         ? overlayPath
         : "/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/overlay.png";
 
-    // IMREAD_UNCHANGED preserves alpha channel for proper compositing.
     cv::Mat overlay = cv::imread(resolvedPath, cv::IMREAD_UNCHANGED);
     if (overlay.empty())
     {

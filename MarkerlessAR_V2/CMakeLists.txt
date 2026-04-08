@@ -23,3 +23,5 @@ add_custom_target(install_after_build ALL
     COMMAND ${CMAKE_COMMAND} --install ${CMAKE_BINARY_DIR}
     COMMENT "Installing ARProject after build"
 )
+
+add_dependencies(install_after_build ARProject)

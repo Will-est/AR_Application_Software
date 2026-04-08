@@ -89,3 +89,4 @@ Lower values reduce CPU usage further (for example `24`), while higher values in
 - Old fixed-function OpenGL rendering remains disabled in this path.
 - OBJ is currently loaded but not rendered in the GLES overlay path.
 - If logs show `GL_RENDERER: llvmpipe`, rendering is software-based and CPU usage will be high; frame pacing helps, but hardware GL acceleration has the largest impact.
+- For headless operation and Wi-Fi display streaming, see `HEADLESS_STREAMING.md`.

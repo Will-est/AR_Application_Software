@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <vector>
 #include <string>
+#include <iostream>
 
 #include <opencv2/opencv.hpp>
 
@@ -306,13 +307,29 @@ void ARDrawingContextDrawCallback(void* param)
 }
 
 // ---------- ARDrawingContext ----------
-ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c)
-    : m_isTextureInitialized(false)
+ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c, bool enableDisplay)
+    : m_displayEnabled(enableDisplay)
+    , m_isTextureInitialized(false)
     , m_calibration(c)
     , m_overlayEnabled(false)
     , m_overlayPatternPresent(false)
     , m_windowName(windowName)
 {
+    if (m_displayEnabled)
+    {
+        const char* x11Display = std::getenv("DISPLAY");
+        const char* waylandDisplay = std::getenv("WAYLAND_DISPLAY");
+        if ((x11Display == nullptr || *x11Display == '\0') &&
+            (waylandDisplay == nullptr || *waylandDisplay == '\0'))
+        {
+            m_displayEnabled = false;
+            std::cout << "ARDrawingContext: no GUI display detected, running headless" << std::endl;
+        }
+    }
+
+    if (!m_displayEnabled)
+        return;
+
     cv::namedWindow(windowName, cv::WINDOW_OPENGL);
     cv::resizeWindow(windowName, frameSize.width, frameSize.height);
 
@@ -336,7 +353,8 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 
 ARDrawingContext::~ARDrawingContext()
 {
-    cv::setOpenGlDrawCallback(m_windowName, 0, 0);
+    if (m_displayEnabled)
+        cv::setOpenGlDrawCallback(m_windowName, 0, 0);
 }
 
 void ARDrawingContext::updateBackground(const cv::Mat& frame)
@@ -385,7 +403,41 @@ void ARDrawingContext::setPatternOverlayState(bool patternPresent, const std::ve
 
 void ARDrawingContext::updateWindow()
 {
+    if (!m_displayEnabled)
+    {
+        m_lastRenderedFrame = composeFrame();
+        return;
+    }
+
     cv::updateWindow(m_windowName);
+}
+
+bool ARDrawingContext::isDisplayEnabled() const
+{
+    return m_displayEnabled;
+}
+
+const cv::Mat& ARDrawingContext::getLastRenderedFrame() const
+{
+    return m_lastRenderedFrame;
+}
+
+cv::Mat ARDrawingContext::composeFrame() const
+{
+    if (m_backgroundImage.empty())
+        return cv::Mat();
+
+    cv::Mat renderFrame = m_backgroundImage.clone();
+    if (m_overlayEnabled && !m_overlayImage.empty())
+    {
+        bool composited = false;
+        if (m_overlayPatternPresent)
+            composited = CompositeOverlayOnPattern(m_overlayImage, m_overlayPatternQuad, renderFrame);
+        if (!composited)
+            CompositeOverlayOnCorner(m_overlayImage, renderFrame);
+    }
+
+    return renderFrame;
 }
 
 void ARDrawingContext::draw()
@@ -393,21 +445,11 @@ void ARDrawingContext::draw()
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (!m_backgroundImage.empty())
+    m_lastRenderedFrame = composeFrame();
+    if (!m_lastRenderedFrame.empty())
     {
-        cv::Mat renderFrame = m_backgroundImage;
-        if (m_overlayEnabled && !m_overlayImage.empty())
-        {
-            renderFrame = m_backgroundImage.clone();
-            bool composited = false;
-            if (m_overlayPatternPresent)
-                composited = CompositeOverlayOnPattern(m_overlayImage, m_overlayPatternQuad, renderFrame);
-            if (!composited)
-                CompositeOverlayOnCorner(m_overlayImage, renderFrame);
-        }
-
-        UploadCameraFrameRGB(renderFrame);
-        DrawBackgroundQuad(m_backgroundImage.cols, m_backgroundImage.rows);
+        UploadCameraFrameRGB(m_lastRenderedFrame);
+        DrawBackgroundQuad(m_lastRenderedFrame.cols, m_lastRenderedFrame.rows);
     }
 
     // DO NOT call fixed-function overlay (will GL_INVALID_OPERATION on GLES)
