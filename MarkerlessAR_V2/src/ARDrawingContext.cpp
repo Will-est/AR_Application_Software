@@ -26,7 +26,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 using namespace glm;
 
-#include "objloader.hpp"
+// #include "objloader.hpp"  // Removed: OBJ loading not currently used
 #include "texture.hpp"   // still included, but we will NOT call loadBMP_custom
 
 // ---------- Debug helpers ----------
@@ -293,10 +293,11 @@ static void CompositeOverlayOnCorner(const cv::Mat& overlayBGRA, cv::Mat& frameB
 }
 
 // ---------- Your original globals (kept) ----------
-std::vector<glm::vec3> vertices;
-std::vector<glm::vec2> uvs;
-std::vector<glm::vec3> normals;
-bool res = false;
+// OBJ model loading disabled (not currently rendered)
+// std::vector<glm::vec3> vertices;
+// std::vector<glm::vec2> uvs;
+// std::vector<glm::vec3> normals;
+// bool res = false;
 
 // ---------- OpenCV draw callback ----------
 void ARDrawingContextDrawCallback(void* param)
@@ -326,12 +327,11 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
     // IMPORTANT: DO NOT call loadBMP_custom here (it segfaults on your system)
     // Texture = loadBMP_custom("...");
 
-    // OBJ load is fine; drawing it needs GLES shader/VBO rewrite (next step)
-    res = loadOBJ("/home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/testcube.obj",
-                  vertices, uvs, normals);
-
-    // You can keep scaling vertices if you want, but it won't be drawn yet.
-    // scale3DModel(0.1f);
+    // OBJ model loading removed (not currently used in rendering)
+    // To enable 3D model rendering later:
+    // 1. Uncomment objloader.hpp include above
+    // 2. Restore vertices/uvs/normals globals
+    // 3. Add loadOBJ call and proper GLES shader rendering code
 }
 
 ARDrawingContext::~ARDrawingContext()

@@ -95,6 +95,7 @@ bool PatternDetector::findPattern(const cv::Mat& image, PatternTrackingInfo& inf
 {
     // Convert input image to gray
     getGray(image, m_grayImg);
+    cv::GaussianBlur(image, m_grayImg, cv::Size(5,5), 0);
     
     // Extract feature points from input gray image
     extractFeatures(m_grayImg, m_queryKeypoints, m_queryDescriptors);

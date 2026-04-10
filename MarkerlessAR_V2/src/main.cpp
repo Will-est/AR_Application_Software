@@ -290,30 +290,60 @@ int main(int argc, const char * argv[])
     {
         cv::VideoCapture cap;
 
-        // Open camera explicitly
+        // Try opening with V4L2 backend first (most direct for Linux)
+        std::cout << "Attempting to open camera device " << CAMERA_INDEX << " with V4L2..." << std::endl;
         cap.open(CAMERA_INDEX, cv::CAP_V4L2);
+        
         if (!cap.isOpened())
         {
-            std::cerr << "Failed to open camera" << std::endl;
-            return 1;
+            std::cerr << "V4L2 backend failed, trying generic backend..." << std::endl;
+            cap.open(CAMERA_INDEX);  // Try with default backend
+            
+            if (!cap.isOpened())
+            {
+                std::cerr << "Failed to open camera on /dev/video" << CAMERA_INDEX << std::endl;
+                std::cerr << "Ensure the camera is connected and permissions are correct." << std::endl;
+                std::cerr << "Try: ls -la /dev/video*" << std::endl;
+                return 1;
+            }
         }
 
-        //  Set format BEFORE first frame is grabbed
-        cap.set(cv::CAP_PROP_FRAME_WIDTH,  CAM_WIDTH);
-        cap.set(cv::CAP_PROP_FRAME_HEIGHT, CAM_HEIGHT);
+        // Give the camera time to initialize (especially important for USB cameras)
+        std::cout << "Camera opened, initializing..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
-        // Prefer MJPEG (huge for USB stability)
-        cap.set(cv::CAP_PROP_FOURCC,
-                cv::VideoWriter::fourcc('M','J','P','G'));
-
-        // Optional: set FPS
-        cap.set(cv::CAP_PROP_FPS, 30);
-
-        // Confirm what you actually got
-        std::cout << "Camera opened at "
-                << cap.get(cv::CAP_PROP_FRAME_WIDTH) << "x"
-                << cap.get(cv::CAP_PROP_FRAME_HEIGHT)
-                << std::endl;
+        // Set format BEFORE first frame is grabbed
+        // Start with native resolution, then resize in software if needed
+        cap.set(cv::CAP_PROP_FRAME_WIDTH,  1280);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 800);
+        
+        // Try MJPEG first (better for USB stability), fall back to H264 if needed
+        int fourcc = cv::VideoWriter::fourcc('M','J','P','G');
+        cap.set(cv::CAP_PROP_FOURCC, fourcc);
+        
+        // Set FPS (camera default is 25 fps for OV9782)
+        cap.set(cv::CAP_PROP_FPS, 25);
+        
+        // Confirm what we actually got
+        double actualWidth = cap.get(cv::CAP_PROP_FRAME_WIDTH);
+        double actualHeight = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
+        double actualFps = cap.get(cv::CAP_PROP_FPS);
+        
+        std::cout << "Camera initialized at " << actualWidth << "x" << actualHeight 
+                  << " @ " << actualFps << " fps" << std::endl;
+        
+        // Try to grab a test frame to verify camera is responsive
+        cv::Mat testFrame;
+        if (!cap.read(testFrame) || testFrame.empty())
+        {
+            std::cerr << "Warning: Could not read test frame from camera" << std::endl;
+            std::cerr << "Camera may still initialize on first processVideo call" << std::endl;
+            // Don't fail here, camera might just need warmup time
+        }
+        else
+        {
+            std::cout << "Test frame captured successfully (" << testFrame.cols << "x" << testFrame.rows << ")" << std::endl;
+        }
 
         processVideo(patternImage, calibration, cap);
     }
