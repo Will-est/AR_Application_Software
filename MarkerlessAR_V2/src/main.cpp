@@ -48,8 +48,15 @@ int getTargetFps()
     return max(1, min(120, fps));
 }
 
-std::string resolvePatternImagePath()
+std::string resolvePatternImagePath(const char* overridePath = nullptr)
 {
+    if (overridePath && *overridePath)
+    {
+        cv::Mat image = cv::imread(overridePath, cv::IMREAD_COLOR);
+        if (!image.empty())
+            return overridePath;
+    }
+
     const char* envPatternPath = std::getenv("AR_PATTERN_IMAGE");
     if (envPatternPath && *envPatternPath)
         return envPatternPath;
@@ -57,8 +64,9 @@ std::string resolvePatternImagePath()
     const char* candidates[] = {
         "pattern.png",
         "../Artifacts/pattern.png",
+        "../../Artifacts/pattern.png",
         "Artifacts/pattern.png",
-        "/home/shreeya607/seniordesign/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern.png"
+        "/home/shreeya607/seniordesign/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern.png"
     };
 
     for (const char* candidate : candidates)
@@ -68,7 +76,7 @@ std::string resolvePatternImagePath()
             return candidate;
     }
 
-    return "Artifacts/pattern.png";
+    return overridePath ? overridePath : "Artifacts/pattern.png";
 }
 
 std::string resolvePatternHexdumpPath()
@@ -77,7 +85,7 @@ std::string resolvePatternHexdumpPath()
     if (envHexdumpPath && *envHexdumpPath)
         return envHexdumpPath;
 
-    return "/home/shreeya607/seniordesign/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern_hex.txt";
+    return "/home/shreeya607/seniordesign/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern_hex.txt";
 }
 
 std::string resolvePatternHexdumpBeforePath()
@@ -86,7 +94,7 @@ std::string resolvePatternHexdumpBeforePath()
     if (envBeforePath && *envBeforePath)
         return envBeforePath;
 
-    return "/home/shreeya607/seniordesign/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern_before_hex.txt";
+    return "/home/shreeya607/seniordesign/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/pattern_before_hex.txt";
 }
 
 std::string resolvePatternHexdumpAfterPath()
@@ -206,11 +214,16 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
 static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
 #if 1
-int main()
+int main(int argc, const char* argv[])
 {
-    const std::string patternPath = resolvePatternImagePath();
+    const std::string patternPath = resolvePatternImagePath(argc >= 2 ? argv[1] : nullptr);
     const std::string hexdumpBeforePath = resolvePatternHexdumpBeforePath();
     const std::string hexdumpAfterPath = resolvePatternHexdumpAfterPath();
+
+    if (argc >= 2)
+    {
+        std::cout << "Using pattern image from command line: " << argv[1] << std::endl;
+    }
 
     cv::Mat patternImage = cv::imread(patternPath, cv::IMREAD_COLOR);
     if (patternImage.empty())
