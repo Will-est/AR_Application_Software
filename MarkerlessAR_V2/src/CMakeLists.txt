@@ -16,6 +16,8 @@ objloader.cpp
 objloader.hpp
 texture.cpp
 texture.hpp
+dma_driver.cpp
+dma_driver.h
 )
 
 set_target_properties(ARProject PROPERTIES OUTPUT_NAME "ARProject.out")

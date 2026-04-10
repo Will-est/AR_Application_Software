@@ -13,9 +13,13 @@
 #include "ARDrawingContext.hpp"
 #include "ARPipeline.hpp"
 #include "DebugHelpers.hpp"
+#include "dma_driver.h"
 
 // Standard includes:
 #include <opencv2/opencv.hpp>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/mman.h>
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
@@ -36,6 +40,8 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
  * reprojection threshold in runtime.
  */
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image);
+
+bool receive_dma_frame(cv::Mat& grayFrame);
 
 /**
  * Performs full detection routine on camera frame and draws the scene using drawing context.
@@ -142,12 +148,45 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     bool shouldQuit = false;
     do
     {
+
         capture >> currentFrame;
         if (currentFrame.empty())
         {
             shouldQuit = true;
             continue;
         }
+        else{
+            // Resize frame to 640x480
+            cv::resize(currentFrame, currentFrame, cv::Size(640, 480));
+
+            // Prepare buffer with messages
+            int total_pixels = 640 * 480;
+            int messages = total_pixels / 5;
+            size_t buffer_size = messages * 16;
+            uint8_t* buffer = new uint8_t[buffer_size];
+            int msg_num = 0;
+            for(int pixel_idx = 0; pixel_idx < total_pixels; pixel_idx += 5){
+                uint8_t* message = buffer + msg_num * 16;
+                message[0] = msg_num % 256; // header: message number
+                for(int p = 0; p < 5; p++){
+                    int idx = pixel_idx + p;
+                    int row = idx / 640;
+                    int col = idx % 640;
+                    cv::Vec3b pixel = currentFrame.at<cv::Vec3b>(row, col);
+                    message[1 + p*3] = pixel[0]; // B
+                    message[1 + p*3 + 1] = pixel[1]; // G
+                    message[1 + p*3 + 2] = pixel[2]; // R
+                }
+                msg_num++;
+            }
+
+            // Send via DMA
+            send_via_dma(buffer, buffer_size);
+
+            delete[] buffer;
+        }
+
+    
 
         shouldQuit = processFrame(currentFrame, pipeline, drawingCtx);
     } while (!shouldQuit);
@@ -166,23 +205,60 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     } while (!shouldQuit);
 }
 
+bool receive_dma_frame(cv::Mat& grayFrame)
+{
+    if (grayFrame.empty() || grayFrame.type() != CV_8UC1)
+    {
+        std::cerr << "[DMA FRAME] ERROR: Invalid output frame (empty or not grayscale)" << std::endl;
+        return false;
+    }
+
+    const int pixelsPerMessage = 15;
+    const int pixelsPerRow = grayFrame.cols;
+    const int messagesPerRow = (pixelsPerRow + pixelsPerMessage - 1) / pixelsPerMessage;
+    int totalPixels = grayFrame.cols * grayFrame.rows;
+    int messages = (totalPixels + pixelsPerMessage - 1) / pixelsPerMessage;
+    size_t rawSize = messages * 16;
+
+    uint8_t* rawBuffer = new uint8_t[rawSize];
+    receive_via_dma(rawBuffer, rawSize);
+
+    for (int m = 0; m < messages; ++m)
+    {
+        uint8_t* message = rawBuffer + m * 16;
+        int basePixel = m * pixelsPerMessage;
+        int remainingPixels = totalPixels - basePixel;
+        int copyPixels = min(remainingPixels, pixelsPerMessage);
+
+        // Header is message[0]: cycles 0-42 per row for standard 640-pixel width
+        // (each row = 43 messages, so headers reset at row boundaries)
+        uint8_t msgHeader = message[0];
+        int expectedHeaderPerRow = m % messagesPerRow;
+        // Optional: validate header == expectedHeaderPerRow for frame integrity
+        
+        for (int p = 0; p < copyPixels; ++p)
+        {
+            grayFrame.data[basePixel + p] = message[1 + p];
+        }
+    }
+
+    delete[] rawBuffer;
+    return true;
+}
+
 bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx)
 {
     // Clone image used for background (we will draw overlay on it)
     cv::Mat img = cameraFrame.clone();
 
-    // Draw information:
-    // COMMENTED OUT: Overlay text disabled for homography testing
-    // if (pipeline.m_patternDetector.enableHomographyRefinement)
-    //     cv::putText(img, "Pose refinement: On   ('h' to switch off)", cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
-    // else
-    //     cv::putText(img, "Pose refinement: Off  ('h' to switch on)",  cv::Point(10,15), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
+    // Now let's get this working with DMA: PL already returns a grayscale + gaussian blurred frame.
+    // Use it directly for detection; do not re-grayscale or blur it again in this application.
+    cv::Mat plGray(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
+    bool gotPlFrame = receive_dma_frame(plGray);
 
-    // cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
+    const cv::Mat& processFrameMat = gotPlFrame ? plGray : cameraFrame;
 
-    
-    // Find a pattern and update it's detection status:
-    drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);
+    drawingCtx.isPatternPresent = pipeline.processFrame(processFrameMat);
 
     // Update a pattern pose:
     drawingCtx.patternPose = pipeline.getPatternLocation();
