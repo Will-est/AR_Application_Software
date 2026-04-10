@@ -213,7 +213,7 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
 
 static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
-#if 1
+#if 0
 int main(int argc, const char* argv[])
 {
     const std::string patternPath = resolvePatternImagePath(argc >= 2 ? argv[1] : nullptr);
