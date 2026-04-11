@@ -520,7 +520,8 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         if (processedForDetection.empty())
         {
             // Until the first PL frame arrives, fall back to using the display frame.
-            processedForDetection = displayFrame;
+            std::cerr << "[TEST] no DMA frame received yet, skipping detection this frame\n";
+            //processedForDetection = displayFrame;
         }
 
         shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx);

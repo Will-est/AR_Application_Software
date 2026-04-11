@@ -10,9 +10,11 @@
 #include <termios.h>
 #include <sys/mman.h>
 
-#define MMAP_SIZE 65535 // enough for control regs + 16-byte message buffers
-#define DMA_TRANSFER_SIZE 16 // legacy init-time transfer size (messages are 16 bytes)
-#define AXI_LITE_ADDR 0xA0000000
+#define MMAP_SIZE             65536
+#define DMA_TRANSFER_SIZE     16
+#define DMA_DEFAULT_TIMEOUT_MS 5000
+
+#define AXI_LITE_ADDR         0xA0000000
 
 #define MM2S_CONTROL_REGISTER       0x00
 #define MM2S_STATUS_REGISTER        0x04
@@ -24,33 +26,32 @@
 #define S2MM_DST_ADDRESS_REGISTER   0x48
 #define S2MM_BUFF_LENGTH_REGISTER   0x58
 
-#define IOC_IRQ_FLAG                1<<12
-#define IDLE_FLAG                   1<<1
+#define IOC_IRQ_FLAG            (1<<12)   // fixed: was missing parentheses
+#define IDLE_FLAG               (1<<1)    // fixed: was missing parentheses
 
-#define STATUS_HALTED               0x00000001
-#define STATUS_IDLE                 0x00000002
-#define STATUS_SG_INCLDED           0x00000008
-#define STATUS_DMA_INTERNAL_ERR     0x00000010
-#define STATUS_DMA_SLAVE_ERR        0x00000020
-#define STATUS_DMA_DECODE_ERR       0x00000040
-#define STATUS_SG_INTERNAL_ERR      0x00000100
-#define STATUS_SG_SLAVE_ERR         0x00000200
-#define STATUS_SG_DECODE_ERR        0x00000400
-#define STATUS_IOC_IRQ              0x00001000
-#define STATUS_DELAY_IRQ            0x00002000
-#define STATUS_ERR_IRQ              0x00004000
+#define STATUS_HALTED           0x00000001
+#define STATUS_IDLE             0x00000002
+#define STATUS_SG_INCLDED       0x00000008
+#define STATUS_DMA_INTERNAL_ERR 0x00000010
+#define STATUS_DMA_SLAVE_ERR    0x00000020
+#define STATUS_DMA_DECODE_ERR   0x00000040
+#define STATUS_SG_INTERNAL_ERR  0x00000100
+#define STATUS_SG_SLAVE_ERR     0x00000200
+#define STATUS_SG_DECODE_ERR    0x00000400
+#define STATUS_IOC_IRQ          0x00001000
+#define STATUS_DELAY_IRQ        0x00002000
+#define STATUS_ERR_IRQ          0x00004000
 
-#define HALT_DMA                    0x00000000
-#define RUN_DMA                     0x00000001
-#define RESET_DMA                   0x00000004
-#define ENABLE_IOC_IRQ              0x00001000
-#define ENABLE_DELAY_IRQ            0x00002000
-#define ENABLE_ERR_IRQ              0x00004000
-#define ENABLE_ALL_IRQ              0x00007000
+#define HALT_DMA                0x00000000
+#define RUN_DMA                 0x00000001
+#define RESET_DMA               0x00000004
+#define ENABLE_IOC_IRQ          0x00001000
+#define ENABLE_DELAY_IRQ        0x00002000
+#define ENABLE_ERR_IRQ          0x00004000
+#define ENABLE_ALL_IRQ          0x00007000
 
-#define DESTINATION_ADDR            0x0f000000
-#define SOURCE_ADDR                 0x0e000000
-
+#define DESTINATION_ADDR        0x0f000000
+#define SOURCE_ADDR             0x0e000000
 
 int dma_init(void);
 unsigned int write_dma(unsigned int *virtual_addr, int offset, unsigned int value);
