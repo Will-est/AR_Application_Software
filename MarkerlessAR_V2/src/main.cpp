@@ -700,6 +700,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         }
     }
 
+    std::cout << "[DMA] frame sent successfully" << std::endl;
     return true;
 }
 
@@ -764,6 +765,6 @@ bool receive_dma_frame(cv::Mat& grayFrame)
         std::cerr << "[DMA] frame received with header issues: invalid=" << invalidHeaderCount
                   << " mismatch=" << headerMismatchCount << std::endl;
     }
-
+    std::cout << "[DMA] frame received successfully" << std::endl;
     return true;
 }

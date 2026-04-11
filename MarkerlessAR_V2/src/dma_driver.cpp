@@ -273,7 +273,7 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
         if (rc != 0)
             return static_cast<unsigned int>(rc);
     }
-    printf("Sent message");
+
     return 0;
 }
 unsigned int receive_message(unsigned char* buffer, size_t length) // receives exactly one 16-byte message
@@ -324,7 +324,6 @@ unsigned int receive_message(unsigned char* buffer, size_t length) // receives e
 
     // Copy received 16 bytes out to caller's buffer
     memcpy(buffer, (void*)virtual_dst_addr, 16);
-    printf("Received message");
     return 0;
 }
 int dma_init(void)
