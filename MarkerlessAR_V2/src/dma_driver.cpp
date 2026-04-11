@@ -161,7 +161,9 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
 {
     if (buffer == nullptr) return 1;
     if (length != 16) return 2;
-
+    printf("[DMA] send_message: entered, checking MM2S idle...\n");
+    unsigned int statusCheck = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
+    printf("[DMA] send_message: MM2S status before idle wait = 0x%08x\n", statusCheck);
     // Wait for previous transfer to finish
     {
         const int timeoutMs = getTimeoutMs();
