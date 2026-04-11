@@ -1,8 +1,50 @@
 #include "dma_driver.hpp"
+#include <errno.h>
+#include <time.h>
+#include <stdlib.h>
 
 unsigned int *virtual_dst_addr;
 unsigned int *virtual_src_addr;
 unsigned int *dma_virtual_addr;
+
+namespace
+{
+uint64_t now_mono_ms()
+{
+    timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000ULL + static_cast<uint64_t>(ts.tv_nsec) / 1000000ULL;
+}
+
+int getTimeoutMs()
+{
+    static int cached = -2;
+    if (cached != -2)
+        return cached;
+
+    const char* raw = getenv("AR_DMA_MSG_TIMEOUT_MS");
+    if (!raw || !*raw)
+    {
+        cached = -1; // disabled
+        return cached;
+    }
+
+    const int parsed = atoi(raw);
+    cached = parsed > 0 ? parsed : -1;
+    return cached;
+}
+
+bool statusHasError(unsigned int status)
+{
+    return (status & (STATUS_DMA_INTERNAL_ERR |
+                      STATUS_DMA_SLAVE_ERR |
+                      STATUS_DMA_DECODE_ERR |
+                      STATUS_SG_INTERNAL_ERR |
+                      STATUS_SG_SLAVE_ERR |
+                      STATUS_SG_DECODE_ERR |
+                      STATUS_ERR_IRQ)) != 0;
+}
+} // namespace
 
 unsigned int write_dma(unsigned int *virtual_addr, int offset, unsigned int value)
 {
@@ -134,13 +176,18 @@ unsigned int dma_mm2s_status(unsigned int *virtual_addr)
 int dma_mm2s_sync(unsigned int *virtual_addr)
 {
     unsigned int mm2s_status =  read_dma(virtual_addr, MM2S_STATUS_REGISTER);
+    const int timeoutMs = getTimeoutMs();
+    const uint64_t deadline = (timeoutMs > 0) ? (now_mono_ms() + static_cast<uint64_t>(timeoutMs)) : 0ULL;
 
 	// sit in this while loop as long as the status does not read back 0x00001002 (4098)
 	// 0x00001002 = IOC interrupt has occured and DMA is idle
 	while(!(mm2s_status & IOC_IRQ_FLAG) || !(mm2s_status & IDLE_FLAG))
 	{
+        if (statusHasError(mm2s_status))
+            return EIO;
+        if (timeoutMs > 0 && now_mono_ms() > deadline)
+            return ETIMEDOUT;
         mm2s_status =  read_dma(virtual_addr, MM2S_STATUS_REGISTER);
-        usleep(50);
     }
 
 	return 0;
@@ -149,13 +196,18 @@ int dma_mm2s_sync(unsigned int *virtual_addr)
 int dma_s2mm_sync(unsigned int *virtual_addr)
 {
     unsigned int s2mm_status = read_dma(virtual_addr, S2MM_STATUS_REGISTER);
+    const int timeoutMs = getTimeoutMs();
+    const uint64_t deadline = (timeoutMs > 0) ? (now_mono_ms() + static_cast<uint64_t>(timeoutMs)) : 0ULL;
 
 	// sit in this while loop as long as the status does not read back 0x00001002 (4098)
 	// 0x00001002 = IOC interrupt has occured and DMA is idle
 	while(!(s2mm_status & IOC_IRQ_FLAG) || !(s2mm_status & IDLE_FLAG))
 	{
+        if (statusHasError(s2mm_status))
+            return EIO;
+        if (timeoutMs > 0 && now_mono_ms() > deadline)
+            return ETIMEDOUT;
         s2mm_status = read_dma(virtual_addr, S2MM_STATUS_REGISTER);
-        usleep(50);
     }
 
 	return 0;
@@ -187,7 +239,14 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
     }
 
     // Wait for previous transfer to finish
-    while (!(read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER) & IDLE_FLAG)) {
+    {
+        const int timeoutMs = getTimeoutMs();
+        const uint64_t deadline = (timeoutMs > 0) ? (now_mono_ms() + static_cast<uint64_t>(timeoutMs)) : 0ULL;
+        while (!(read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER) & IDLE_FLAG))
+        {
+            if (timeoutMs > 0 && now_mono_ms() > deadline)
+                return ETIMEDOUT;
+        }
     }
 
     // Clear old sticky completion/error bits
@@ -209,7 +268,11 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
     write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, 16);
 
     // Wait until transfer completes
-    dma_mm2s_sync(dma_virtual_addr);
+    {
+        const int rc = dma_mm2s_sync(dma_virtual_addr);
+        if (rc != 0)
+            return static_cast<unsigned int>(rc);
+    }
 
     return 0;
 }
@@ -224,7 +287,14 @@ unsigned int receive_message(unsigned char* buffer, size_t length) // receives e
     }
 
     // Wait until previous S2MM transfer is finished
-    while (!(read_dma(dma_virtual_addr, S2MM_STATUS_REGISTER) & IDLE_FLAG)) {
+    {
+        const int timeoutMs = getTimeoutMs();
+        const uint64_t deadline = (timeoutMs > 0) ? (now_mono_ms() + static_cast<uint64_t>(timeoutMs)) : 0ULL;
+        while (!(read_dma(dma_virtual_addr, S2MM_STATUS_REGISTER) & IDLE_FLAG))
+        {
+            if (timeoutMs > 0 && now_mono_ms() > deadline)
+                return ETIMEDOUT;
+        }
     }
 
     // Clear old sticky completion/error bits
@@ -246,7 +316,11 @@ unsigned int receive_message(unsigned char* buffer, size_t length) // receives e
     write_dma(dma_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, 16);
 
     // Wait until the AXI stream side has delivered the message into memory
-    dma_s2mm_sync(dma_virtual_addr);
+    {
+        const int rc = dma_s2mm_sync(dma_virtual_addr);
+        if (rc != 0)
+            return static_cast<unsigned int>(rc);
+    }
 
     // Copy received 16 bytes out to caller's buffer
     memcpy(buffer, (void*)virtual_dst_addr, 16);

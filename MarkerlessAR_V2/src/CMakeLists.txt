@@ -32,6 +32,7 @@ endif()
 target_link_libraries( ARProject ${OpenCV_LIBRARIES} )
 target_link_libraries( ARProject ${OPENGL_LIBRARIES} )
 target_link_libraries( ARProject GLEW::GLEW )
+target_link_libraries( ARProject pthread )
      
 # installs the executable to the src folder in the project directory
 install(TARGETS ARProject DESTINATION ${ARProject_SOURCE_DIR}/src)

@@ -20,9 +20,12 @@
 #include <cstdlib>
 #include <chrono>
 #include <cctype>
+#include <condition_variable>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <atomic>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -191,6 +194,12 @@ void writeHexdump(std::ostream& output, const cv::Mat& grayImage)
     }
 
     output << std::dec << std::setfill(' ');
+}
+
+bool getEnvFlag(const char* name)
+{
+    const char* value = std::getenv(name);
+    return value && *value && std::strcmp(value, "0") != 0;
 }
 }
 
@@ -412,6 +421,58 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     const auto framePeriod = std::chrono::milliseconds(1000 / getTargetFps());
     auto nextFrameDeadline = Clock::now();
 
+    // Two-thread DMA: one thread sends frames (MM2S), one thread receives processed frames (S2MM).
+    // This keeps the receive side draining even while we're still sending a frame.
+    std::atomic<bool> dmaRunning{true};
+    std::mutex txMutex;
+    std::condition_variable txCv;
+    cv::Mat pendingTxFrame;
+    bool hasPendingTx = false;
+
+    std::mutex rxMutex;
+    cv::Mat latestProcessedFrame;
+    bool hasProcessedFrame = false;
+
+    std::thread rxThread([&]()
+    {
+        while (dmaRunning.load())
+        {
+            cv::Mat processed;
+            if (!receive_dma_frame(processed))
+            {
+                dmaRunning.store(false);
+                break;
+            }
+
+            std::lock_guard<std::mutex> lock(rxMutex);
+            latestProcessedFrame = processed;
+            hasProcessedFrame = true;
+        }
+    });
+
+    std::thread txThread([&]()
+    {
+        while (dmaRunning.load())
+        {
+            cv::Mat frameToSend;
+            {
+                std::unique_lock<std::mutex> lock(txMutex);
+                txCv.wait(lock, [&]() { return !dmaRunning.load() || hasPendingTx; });
+                if (!dmaRunning.load())
+                    break;
+
+                frameToSend = pendingTxFrame;
+                hasPendingTx = false;
+            }
+
+            if (!send_dma_frame(frameToSend))
+            {
+                dmaRunning.store(false);
+                break;
+            }
+        }
+    });
+
     bool shouldQuit = false;
     do
     {
@@ -428,25 +489,41 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         else
             displayFrame = currentFrame;
 
-        // Ensure the outgoing frame is 640x480 and send it over DMA as 16B messages.
-        if (!send_dma_frame(displayFrame))
+        if (displayFrame.type() != CV_8UC3)
         {
-            std::cerr << "[DMA] send failed; stopping" << std::endl;
-            shouldQuit = true;
-            continue;
+            cv::Mat converted;
+            displayFrame.convertTo(converted, CV_8U);
+            if (converted.channels() == 1)
+                cv::cvtColor(converted, displayFrame, cv::COLOR_GRAY2BGR);
+            else if (converted.channels() == 4)
+                cv::cvtColor(converted, displayFrame, cv::COLOR_BGRA2BGR);
+            else
+                displayFrame = converted;
         }
 
-        cv::Mat grayFromPl;
-        if (!receive_dma_frame(grayFromPl))
+        // Kick the send thread with the latest frame (drops older unsent frames if we're behind).
         {
-            std::cerr << "[DMA] receive failed; stopping" << std::endl;
-            shouldQuit = true;
-            continue;
+            std::lock_guard<std::mutex> lock(txMutex);
+            pendingTxFrame = displayFrame;
+            hasPendingTx = true;
+        }
+        txCv.notify_one();
+
+        // Use the most recent processed frame we received from the PL (if available).
+        cv::Mat processedForDetection;
+        {
+            std::lock_guard<std::mutex> lock(rxMutex);
+            if (hasProcessedFrame)
+                processedForDetection = latestProcessedFrame;
         }
 
-        // Use original BGR frame for display, but run detection on the PL-processed frame.
-        // `grayFromPl` is already grayscale + Gaussian blurred by the PL.
-        shouldQuit = processFrame(displayFrame, grayFromPl, pipeline, drawingCtx);
+        if (processedForDetection.empty())
+        {
+            // Until the first PL frame arrives, fall back to using the display frame.
+            processedForDetection = displayFrame;
+        }
+
+        shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx);
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -457,6 +534,11 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
                 nextFrameDeadline = now;
         }
     } while (!shouldQuit);
+
+    dmaRunning.store(false);
+    txCv.notify_all();
+    txThread.join();
+    rxThread.join();
 }
 
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image)
@@ -628,6 +710,10 @@ bool receive_dma_frame(cv::Mat& grayFrame)
     constexpr int pixelsPerMessage = 15; // 1 header + 15 gray pixels = 16 bytes
     constexpr int messagesPerRow = (CAM_WIDTH + pixelsPerMessage - 1) / pixelsPerMessage; // 43 for 640px
 
+    const bool strictHeaders = getEnvFlag("AR_DMA_STRICT_HEADERS");
+    int headerMismatchCount = 0;
+    int invalidHeaderCount = 0;
+
     std::uint8_t message[16];
 
     for (int row = 0; row < CAM_HEIGHT; ++row)
@@ -645,11 +731,25 @@ bool receive_dma_frame(cv::Mat& grayFrame)
 
             const std::uint8_t header = message[0];
             const std::uint8_t expectedHeader = static_cast<std::uint8_t>(msgInRow); // 0..42
-            if (header != expectedHeader)
+            if (header > static_cast<std::uint8_t>(messagesPerRow - 1))
             {
+                ++invalidHeaderCount;
+                if (invalidHeaderCount <= 10)
+                {
+                    std::cerr << "[DMA] error: invalid header " << static_cast<int>(header)
+                              << " at row " << row << " msg " << msgInRow << std::endl;
+                }
+                if (strictHeaders)
+                    return false;
+            }
+            else if (header != expectedHeader)
+            {
+                ++headerMismatchCount;
                 std::cerr << "[DMA] warning: header " << static_cast<int>(header)
                           << " expected " << static_cast<int>(expectedHeader)
                           << " at row " << row << " msg " << msgInRow << std::endl;
+                if (strictHeaders && headerMismatchCount > 5)
+                    return false;
             }
 
             const int baseCol = msgInRow * pixelsPerMessage;
@@ -657,6 +757,12 @@ bool receive_dma_frame(cv::Mat& grayFrame)
             const int copyPixels = min(pixelsPerMessage, remaining); // last message copies 10 pixels, ignores padded zeros
             std::memcpy(dstRow + baseCol, message + 1, static_cast<std::size_t>(copyPixels));
         }
+    }
+
+    if (!strictHeaders && (invalidHeaderCount > 0 || headerMismatchCount > 0))
+    {
+        std::cerr << "[DMA] frame received with header issues: invalid=" << invalidHeaderCount
+                  << " mismatch=" << headerMismatchCount << std::endl;
     }
 
     return true;
