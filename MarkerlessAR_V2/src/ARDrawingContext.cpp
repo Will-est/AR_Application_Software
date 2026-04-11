@@ -172,10 +172,17 @@ static void InitBackgroundQuadOnce() //programmable replacement for draw camera 
     CheckGLError("InitBackgroundQuadOnce");
 }
 
-static void UploadCameraFrameRGB(const cv::Mat& bgr)
+static void UploadCameraFrameToRGB(const cv::Mat& frame)
 {
     cv::Mat rgb;
-    cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
+    if (frame.channels() == 3)
+        cv::cvtColor(frame, rgb, cv::COLOR_BGR2RGB);
+    else if (frame.channels() == 4)
+        cv::cvtColor(frame, rgb, cv::COLOR_BGRA2RGB);
+    else if (frame.channels() == 1)
+        cv::cvtColor(frame, rgb, cv::COLOR_GRAY2RGB);
+    else
+        return;
     if (!rgb.isContinuous()) rgb = rgb.clone();
 
     glActiveTexture(GL_TEXTURE0);
@@ -396,9 +403,16 @@ void ARDrawingContext::draw()
     if (!m_backgroundImage.empty())
     {
         cv::Mat renderFrame = m_backgroundImage;
+        cv::Mat renderFrameBGR;
         if (m_overlayEnabled && !m_overlayImage.empty())
         {
-            renderFrame = m_backgroundImage.clone();
+            // Overlay compositing expects BGR. Convert grayscale background if needed.
+            if (m_backgroundImage.channels() == 1)
+                cv::cvtColor(m_backgroundImage, renderFrameBGR, cv::COLOR_GRAY2BGR);
+            else
+                renderFrameBGR = m_backgroundImage.clone();
+
+            renderFrame = renderFrameBGR;
             bool composited = false;
             if (m_overlayPatternPresent)
                 composited = CompositeOverlayOnPattern(m_overlayImage, m_overlayPatternQuad, renderFrame);
@@ -406,7 +420,7 @@ void ARDrawingContext::draw()
                 CompositeOverlayOnCorner(m_overlayImage, renderFrame);
         }
 
-        UploadCameraFrameRGB(renderFrame);
+        UploadCameraFrameToRGB(renderFrame);
         DrawBackgroundQuad(m_backgroundImage.cols, m_backgroundImage.rows);
     }
 

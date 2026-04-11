@@ -89,10 +89,14 @@ void PatternDetector::buildPatternFromImage(const cv::Mat& image, Pattern& patte
 
 bool PatternDetector::findPattern(const cv::Mat& image, PatternTrackingInfo& info)
 {
-    // Convert input image to gray
+    // Convert input image to gray.
+    // When the input is already 1-channel (PL/DMA path), keep it as-is.
     getGray(image, m_grayImg);
-    // gaussian the image (blur the grayscale image, not the color input)
-    cv::GaussianBlur(m_grayImg, m_grayImg, cv::Size(5,5), 0);
+
+    // Gaussian blur the grayscale image only when we're starting from a color input.
+    // The PL/DMA path already provides grayscale + blur.
+    if (image.channels() != 1)
+        cv::GaussianBlur(m_grayImg, m_grayImg, cv::Size(5,5), 0);
 
     extractFeatures(m_grayImg, m_queryKeypoints, m_queryDescriptors);
     

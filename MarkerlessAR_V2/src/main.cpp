@@ -13,6 +13,7 @@
 #include "ARDrawingContext.hpp"
 #include "ARPipeline.hpp"
 #include "DebugHelpers.hpp"
+#include "dma_driver.hpp"
 
 // Standard includes:
 #include <opencv2/opencv.hpp>
@@ -24,6 +25,9 @@
 #include <iostream>
 #include <string>
 #include <thread>
+#include <vector>
+#include <cstdint>
+#include <cstring>
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
@@ -209,9 +213,13 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
  * In addition, this function draw overlay with debug information on top of the AR window.
  * Returns true if processing loop should be stopped; otherwise - false.
  */
-bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx);
+bool processFrame(const cv::Mat& displayFrame, const cv::Mat& processedFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx);
 
 static void configureImageOverlay(ARDrawingContext& drawingCtx);
+
+// DMA helpers (16B messages)
+bool send_dma_frame(const cv::Mat& currentFrame);
+bool receive_dma_frame(cv::Mat& grayFrame);
 
 #if 0
 int main(int argc, const char* argv[])
@@ -387,7 +395,13 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         return;
     }
 
-    cv::Size frameSize(currentFrame.cols, currentFrame.rows);
+    if (dma_init() != 0)
+    {
+        std::cerr << "[DMA] init failed" << std::endl;
+        return;
+    }
+
+    cv::Size frameSize(CAM_WIDTH, CAM_HEIGHT);
 
     ARPipeline pipeline(patternImage, calibration);
     ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
@@ -408,7 +422,31 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             continue;
         }
 
-        shouldQuit = processFrame(currentFrame, pipeline, drawingCtx);
+        cv::Mat displayFrame;
+        if (currentFrame.cols != CAM_WIDTH || currentFrame.rows != CAM_HEIGHT)
+            cv::resize(currentFrame, displayFrame, cv::Size(CAM_WIDTH, CAM_HEIGHT));
+        else
+            displayFrame = currentFrame;
+
+        // Ensure the outgoing frame is 640x480 and send it over DMA as 16B messages.
+        if (!send_dma_frame(displayFrame))
+        {
+            std::cerr << "[DMA] send failed; stopping" << std::endl;
+            shouldQuit = true;
+            continue;
+        }
+
+        cv::Mat grayFromPl;
+        if (!receive_dma_frame(grayFromPl))
+        {
+            std::cerr << "[DMA] receive failed; stopping" << std::endl;
+            shouldQuit = true;
+            continue;
+        }
+
+        // Use original BGR frame for display, but run detection on the PL-processed frame.
+        // `grayFromPl` is already grayscale + Gaussian blurred by the PL.
+        shouldQuit = processFrame(displayFrame, grayFromPl, pipeline, drawingCtx);
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -436,7 +474,7 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     bool shouldQuit = false;
     do
     {
-        shouldQuit = processFrame(image, pipeline, drawingCtx);
+        shouldQuit = processFrame(image, image, pipeline, drawingCtx);
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -449,10 +487,10 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     } while (!shouldQuit);
 }
 
-bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx)
+bool processFrame(const cv::Mat& displayFrame, const cv::Mat& processedFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx)
 {
     // Clone image used for background (we will draw overlay on it)
-    cv::Mat img = cameraFrame.clone();
+    cv::Mat img = displayFrame.clone();
 
     // Draw information:
     // COMMENTED OUT: Overlay text disabled for homography testing
@@ -464,7 +502,7 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
     cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
 
     // Find a pattern and update it's detection status:
-    drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);
+    drawingCtx.isPatternPresent = pipeline.processFrame(processedFrame);
 
     // Update a pattern pose:
     drawingCtx.patternPose = pipeline.getPatternLocation();
@@ -531,4 +569,95 @@ static void configureImageOverlay(ARDrawingContext& drawingCtx)
     drawingCtx.setOverlayImage(overlay);
     drawingCtx.setOverlayEnabled(true);
     std::cout << "Image overlay enabled: " << resolvedPath << std::endl;
+}
+
+bool send_dma_frame(const cv::Mat& currentFrame)
+{
+    if (currentFrame.empty() || currentFrame.type() != CV_8UC3)
+    {
+        std::cerr << "[DMA] send_dma_frame: invalid input frame (need CV_8UC3)" << std::endl;
+        return false;
+    }
+
+    cv::Mat frame;
+    if (currentFrame.cols != CAM_WIDTH || currentFrame.rows != CAM_HEIGHT)
+        cv::resize(currentFrame, frame, cv::Size(CAM_WIDTH, CAM_HEIGHT));
+    else
+        frame = currentFrame;
+
+    constexpr int pixelsPerMessage = 5; // 1 header + 5 * (B,G,R) = 16 bytes
+
+    std::uint8_t message[16];
+    std::size_t msgNum = 0;
+
+    for (int row = 0; row < CAM_HEIGHT; ++row)
+    {
+        const cv::Vec3b* rowPtr = frame.ptr<cv::Vec3b>(row);
+        for (int col = 0; col < CAM_WIDTH; col += pixelsPerMessage)
+        {
+            std::memset(message, 0, sizeof(message));
+            message[0] = static_cast<std::uint8_t>(msgNum & 0xFF); // header wraps 0..255
+
+            for (int p = 0; p < pixelsPerMessage; ++p)
+            {
+                const cv::Vec3b pixel = rowPtr[col + p];
+                message[1 + p * 3]     = pixel[0]; // B
+                message[1 + p * 3 + 1] = pixel[1]; // G
+                message[1 + p * 3 + 2] = pixel[2]; // R
+            }
+
+            const unsigned int rc = send_message(message, sizeof(message));
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] send_message failed rc=" << rc
+                          << " at msg " << msgNum << std::endl;
+                return false;
+            }
+
+            ++msgNum;
+        }
+    }
+
+    return true;
+}
+
+bool receive_dma_frame(cv::Mat& grayFrame)
+{
+    grayFrame.create(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
+
+    constexpr int pixelsPerMessage = 15; // 1 header + 15 gray pixels = 16 bytes
+    constexpr int messagesPerRow = (CAM_WIDTH + pixelsPerMessage - 1) / pixelsPerMessage; // 43 for 640px
+
+    std::uint8_t message[16];
+
+    for (int row = 0; row < CAM_HEIGHT; ++row)
+    {
+        std::uint8_t* dstRow = grayFrame.ptr<std::uint8_t>(row);
+        for (int msgInRow = 0; msgInRow < messagesPerRow; ++msgInRow)
+        {
+            const unsigned int rc = receive_message(message, sizeof(message));
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] receive_message failed rc=" << rc
+                          << " at row " << row << " msg " << msgInRow << std::endl;
+                return false;
+            }
+
+            const std::uint8_t header = message[0];
+            const std::uint8_t expectedHeader = static_cast<std::uint8_t>(msgInRow); // 0..42
+            if (header != expectedHeader)
+            {
+                std::cerr << "[DMA] warning: header " << static_cast<int>(header)
+                          << " expected " << static_cast<int>(expectedHeader)
+                          << " at row " << row << " msg " << msgInRow << std::endl;
+            }
+
+            const int baseCol = msgInRow * pixelsPerMessage;
+            const int remaining = CAM_WIDTH - baseCol;
+            const int copyPixels = min(pixelsPerMessage, remaining); // last message copies 10 pixels, ignores padded zeros
+            std::memcpy(dstRow + baseCol, message + 1, static_cast<std::size_t>(copyPixels));
+        }
+    }
+
+    return true;
 }
