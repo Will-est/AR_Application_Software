@@ -12,7 +12,7 @@
 
 #define MMAP_SIZE             65536
 #define DMA_TRANSFER_SIZE     16
-#define DMA_DEFAULT_TIMEOUT_MS 5000
+#define DMA_DEFAULT_TIMEOUT_MS 60000
 
 #define AXI_LITE_ADDR         0xA0000000
 
