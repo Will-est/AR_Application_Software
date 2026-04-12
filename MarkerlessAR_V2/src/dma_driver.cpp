@@ -98,14 +98,13 @@ int dma_mm2s_sync(unsigned int *virtual_addr)
 {
     unsigned int mm2s_status = read_dma(virtual_addr, MM2S_STATUS_REGISTER);
     unsigned int s2mm_status = read_dma(virtual_addr, S2MM_STATUS_REGISTER);
+    printf("[DMA] mm2s_sync: MM2S=0x%08x S2MM=0x%08x\n", mm2s_status, s2mm_status);
 
     const int timeoutMs = getTimeoutMs();
     const uint64_t deadline = (timeoutMs > 0) ? (now_mono_ms() + static_cast<uint64_t>(timeoutMs)) : 0ULL;
 
     while (!(mm2s_status & IOC_IRQ_FLAG) || !(mm2s_status & IDLE_FLAG))
     {
-        printf("[DMA] mm2s_sync: MM2S=0x%08x S2MM=0x%08x\n", mm2s_status, s2mm_status);
-
         if (statusHasError(mm2s_status))
         {
             printf("[DMA] mm2s_sync: error MM2S=0x%08x\n", mm2s_status);
@@ -113,13 +112,13 @@ int dma_mm2s_sync(unsigned int *virtual_addr)
         }
         if (timeoutMs > 0 && now_mono_ms() > deadline)
         {
+            s2mm_status = read_dma(virtual_addr, S2MM_STATUS_REGISTER);
             printf("[DMA] mm2s_sync: TIMED OUT MM2S=0x%08x S2MM=0x%08x\n", mm2s_status, s2mm_status);
             dma_s2mm_status(virtual_addr);
             dma_mm2s_status(virtual_addr);
             return ETIMEDOUT;
         }
         mm2s_status = read_dma(virtual_addr, MM2S_STATUS_REGISTER);
-        s2mm_status = read_dma(virtual_addr, S2MM_STATUS_REGISTER);
     }
 
     return 0;
