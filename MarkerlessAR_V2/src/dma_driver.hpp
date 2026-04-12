@@ -53,6 +53,11 @@
 #define DESTINATION_ADDR        0x0f000000
 #define SOURCE_ADDR             0x0e000000
 
+extern unsigned int *virtual_dst_addr;
+extern unsigned int *virtual_src_addr;
+extern unsigned int *dma_virtual_addr;
+
+
 int dma_init(void);
 unsigned int write_dma(unsigned int *virtual_addr, int offset, unsigned int value);
 unsigned int read_dma(unsigned int *virtual_addr, int offset);
