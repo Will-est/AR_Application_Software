@@ -667,47 +667,60 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     else
         frame = currentFrame;
 
-    constexpr int pixelsPerBurst = 5;
-    constexpr int bytesPerBurst  = 16; // 1 header + 5*3 BGR bytes
-    constexpr int burstsPerRow   = CAM_WIDTH / pixelsPerBurst; // 128
-    constexpr int bytesPerRow    = burstsPerRow * bytesPerBurst; // 2048
+    // New TX format:
+    // - 5 rows at a time (5 * 640 pixels)
+    // - 1x 16-byte header burst per 5-row block
+    // - then raw BGR bytes for those 5 rows in 16-byte bursts
+    //
+    // Note: With AXI DMA, TLAST is asserted at the end of each MM2S transfer.
+    // This makes TLAST align to "end of 5-row block" (not end of each row).
+    constexpr int blockRows = 5;
+    constexpr int bytesPerPixel = 3; // B,G,R
+    constexpr int headerBytes = 16;
+    constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
+    constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616 (16B-aligned)
 
-    // Pack one full row into src buffer then send as one DMA transaction
-    uint8_t* src = (uint8_t*)virtual_src_addr;
+    static_assert((payloadBytesPerBlock % 16) == 0, "5-row payload must be 16B aligned");
+    static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
+    static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 5 for this TX format");
 
-    for (int row = 0; row < CAM_HEIGHT; ++row)
+    uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
+
+    int blockIndex = 0;
+    for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
-        const cv::Vec3b* rowPtr = frame.ptr<cv::Vec3b>(row);
+        // 16-byte header (PL can ignore fields it doesn't need)
+        std::memset(src, 0, headerBytes);
+        // Header ID increments: 0,1,2,... per 5-row block.
+        src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
 
-        // Pack all 128 bursts for this row into src buffer
-        for (int b = 0; b < burstsPerRow; ++b)
+        // Payload: 5 rows of raw BGR bytes (9600 bytes)
+        uint8_t* payload = src + headerBytes;
+        size_t payloadOffset = 0;
+        for (int r = 0; r < blockRows; ++r)
         {
-            uint8_t* burst = src + b * bytesPerBurst;
-            burst[0] = static_cast<uint8_t>(b); // header = burst index 0..127
-            for (int p = 0; p < pixelsPerBurst; ++p)
-            {
-                const cv::Vec3b pixel = rowPtr[b * pixelsPerBurst + p];
-                burst[1 + p * 3]     = pixel[0]; // B
-                burst[1 + p * 3 + 1] = pixel[1]; // G
-                burst[1 + p * 3 + 2] = pixel[2]; // R
-            }
+            const uint8_t* rowBytes = frame.ptr<uint8_t>(startRow + r);
+            std::memcpy(payload + payloadOffset, rowBytes, static_cast<size_t>(CAM_WIDTH * bytesPerPixel));
+            payloadOffset += static_cast<size_t>(CAM_WIDTH * bytesPerPixel);
         }
 
-        // Send entire row as one DMA transaction (2048 bytes)
+        // Send header + payload as one MM2S DMA transaction (9616 bytes)
         write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
         write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-        write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, bytesPerRow);
+        write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
 
         const int rc = dma_mm2s_sync(dma_virtual_addr);
         if (rc != 0)
         {
-            std::cerr << "[DMA] send_dma_frame: row " << row << " failed rc=" << rc << std::endl;
+            std::cerr << "[DMA] send_dma_frame: block " << blockIndex
+                      << " (rows " << startRow << "-" << (startRow + blockRows - 1)
+                      << ") failed rc=" << rc << std::endl;
             return false;
         }
-        printf("[DMA] send_dma_frame: row %d sent OK\n", row);
+        printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
     }
 
-    std::cout << "[DMA] frame sent successfully\n";
+    std::cout << "[DMA] frame sent successfully" << std::endl;
     return true;
 }
 
@@ -715,62 +728,59 @@ bool receive_dma_frame(cv::Mat& grayFrame)
 {
     grayFrame.create(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
 
-    constexpr int pixelsPerMessage = 15; // 1 header + 15 gray pixels = 16 bytes
-    constexpr int messagesPerRow = (CAM_WIDTH + pixelsPerMessage - 1) / pixelsPerMessage; // 43 for 640px
+    // RX format:
+    // - For each row: 16-byte header (id increments 0,1,2,...) + 640 bytes grayscale payload
+    // - Stream itself may be delivered as 16-byte bursts, but we receive the whole row in one S2MM DMA transfer
+    //   to avoid re-arming/waiting between bursts.
+    constexpr int headerBytes = 16;
+    constexpr int payloadBytes = CAM_WIDTH; // 1 byte per pixel
+    constexpr int rowBytes = headerBytes + payloadBytes; // 656
+    static_assert((rowBytes % 16) == 0, "row transfer must be 16B aligned");
 
     const bool strictHeaders = getEnvFlag("AR_DMA_STRICT_HEADERS");
     int headerMismatchCount = 0;
-    int invalidHeaderCount = 0;
 
-    std::uint8_t message[16];
+    std::uint8_t* rx = reinterpret_cast<std::uint8_t*>(virtual_dst_addr);
 
     for (int row = 0; row < CAM_HEIGHT; ++row)
     {
         std::uint8_t* dstRow = grayFrame.ptr<std::uint8_t>(row);
-        for (int msgInRow = 0; msgInRow < messagesPerRow; ++msgInRow)
+
+        // Arm S2MM for one full row (header+payload) and wait once.
+        // write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+        write_dma(dma_virtual_addr, S2MM_DST_ADDRESS_REGISTER, DESTINATION_ADDR);
+        write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+        write_dma(dma_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, rowBytes);
+
+        const int rc = dma_s2mm_sync(dma_virtual_addr);
+        if (rc != 0)
         {
-            const unsigned int rc = receive_message(message, sizeof(message));
-            if (rc != 0)
-            {
-                std::cerr << "[DMA] receive_message failed rc=" << rc
-                          << " at row " << row << " msg " << msgInRow << std::endl;
-                return false;
-            }
-
-            const std::uint8_t header = message[0];
-            const std::uint8_t expectedHeader = static_cast<std::uint8_t>(msgInRow); // 0..42
-            if (header > static_cast<std::uint8_t>(messagesPerRow - 1))
-            {
-                ++invalidHeaderCount;
-                if (invalidHeaderCount <= 10)
-                {
-                    std::cerr << "[DMA] error: invalid header " << static_cast<int>(header)
-                              << " at row " << row << " msg " << msgInRow << std::endl;
-                }
-                if (strictHeaders)
-                    return false;
-            }
-            else if (header != expectedHeader)
-            {
-                ++headerMismatchCount;
-                std::cerr << "[DMA] warning: header " << static_cast<int>(header)
-                          << " expected " << static_cast<int>(expectedHeader)
-                          << " at row " << row << " msg " << msgInRow << std::endl;
-                if (strictHeaders && headerMismatchCount > 5)
-                    return false;
-            }
-
-            const int baseCol = msgInRow * pixelsPerMessage;
-            const int remaining = CAM_WIDTH - baseCol;
-            const int copyPixels = min(pixelsPerMessage, remaining); // last message copies 10 pixels, ignores padded zeros
-            std::memcpy(dstRow + baseCol, message + 1, static_cast<std::size_t>(copyPixels));
+            std::cerr << "[DMA] receive_dma_frame: row " << row << " failed rc=" << rc << std::endl;
+            return false;
         }
+
+        // Header id can be encoded as either 8-bit (byte0) or 16-bit LE (byte0..1).
+        const uint16_t headerId16 = static_cast<uint16_t>(rx[0]) | (static_cast<uint16_t>(rx[1]) << 8);
+        const uint8_t headerId8 = rx[0];
+        const uint16_t expected16 = static_cast<uint16_t>(row);
+        const uint8_t expected8 = static_cast<uint8_t>(row & 0xFF);
+
+        if (!(headerId16 == expected16 || headerId8 == expected8))
+        {
+            ++headerMismatchCount;
+            std::cerr << "[DMA] warning: row header id=" << headerId16
+                      << " (byte0=" << static_cast<int>(headerId8) << ") expected "
+                      << expected16 << " at row " << row << std::endl;
+            if (strictHeaders && headerMismatchCount > 5)
+                return false;
+        }
+
+        std::memcpy(dstRow, rx + headerBytes, payloadBytes);
     }
 
-    if (!strictHeaders && (invalidHeaderCount > 0 || headerMismatchCount > 0))
+    if (!strictHeaders && headerMismatchCount > 0)
     {
-        std::cerr << "[DMA] frame received with header issues: invalid=" << invalidHeaderCount
-                  << " mismatch=" << headerMismatchCount << std::endl;
+        std::cerr << "[DMA] frame received with row-header mismatches: " << headerMismatchCount << std::endl;
     }
     std::cout << "[DMA] frame received successfully" << std::endl;
     return true;
