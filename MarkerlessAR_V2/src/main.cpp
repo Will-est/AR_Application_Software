@@ -667,42 +667,47 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     else
         frame = currentFrame;
 
-    constexpr int pixelsPerMessage = 5; // 1 header + 5 * (B,G,R) = 16 bytes
+    constexpr int pixelsPerBurst = 5;
+    constexpr int bytesPerBurst  = 16; // 1 header + 5*3 BGR bytes
+    constexpr int burstsPerRow   = CAM_WIDTH / pixelsPerBurst; // 128
+    constexpr int bytesPerRow    = burstsPerRow * bytesPerBurst; // 2048
 
-    std::uint8_t message[16];
-    std::size_t msgNum = 0;
+    // Pack one full row into src buffer then send as one DMA transaction
+    uint8_t* src = (uint8_t*)virtual_src_addr;
 
     for (int row = 0; row < CAM_HEIGHT; ++row)
     {
         const cv::Vec3b* rowPtr = frame.ptr<cv::Vec3b>(row);
-        for (int col = 0; col < CAM_WIDTH; col += pixelsPerMessage)
+
+        // Pack all 128 bursts for this row into src buffer
+        for (int b = 0; b < burstsPerRow; ++b)
         {
-            std::memset(message, 0, sizeof(message));
-            message[0] = static_cast<std::uint8_t>(msgNum & 0xFF); // header wraps 0..255
-
-            for (int p = 0; p < pixelsPerMessage; ++p)
+            uint8_t* burst = src + b * bytesPerBurst;
+            burst[0] = static_cast<uint8_t>(b); // header = burst index 0..127
+            for (int p = 0; p < pixelsPerBurst; ++p)
             {
-                const cv::Vec3b pixel = rowPtr[col + p];
-                message[1 + p * 3]     = pixel[0]; // B
-                message[1 + p * 3 + 1] = pixel[1]; // G
-                message[1 + p * 3 + 2] = pixel[2]; // R
+                const cv::Vec3b pixel = rowPtr[b * pixelsPerBurst + p];
+                burst[1 + p * 3]     = pixel[0]; // B
+                burst[1 + p * 3 + 1] = pixel[1]; // G
+                burst[1 + p * 3 + 2] = pixel[2]; // R
             }
-
-            const unsigned int rc = send_message(message, sizeof(message));
-            if (rc != 0)
-            {          
-                std::cerr << "[DMA] send_message failed rc=" << rc
-                        << " at msg " << msgNum 
-                        << " row=" << row 
-                        << " col=" << col << std::endl;
-                return false;
-            }
-
-            ++msgNum;
         }
+
+        // Send entire row as one DMA transaction (2048 bytes)
+        write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
+        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+        write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, bytesPerRow);
+
+        const int rc = dma_mm2s_sync(dma_virtual_addr);
+        if (rc != 0)
+        {
+            std::cerr << "[DMA] send_dma_frame: row " << row << " failed rc=" << rc << std::endl;
+            return false;
+        }
+        printf("[DMA] send_dma_frame: row %d sent OK\n", row);
     }
 
-    std::cout << "[DMA] frame sent successfully" << std::endl;
+    std::cout << "[DMA] frame sent successfully\n";
     return true;
 }
 
