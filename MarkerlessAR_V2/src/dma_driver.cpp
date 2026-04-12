@@ -162,11 +162,11 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
     if (buffer == nullptr) return 1;
     if (length != 16) return 2;
 
-    unsigned int mm2s_status = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
-    printf("[DMA] send_message: entered, MM2S status = 0x%08x\n", mm2s_status);
+    static int msgCount = 0;
 
-    // Only wait for idle if a previous transfer completed
-    // On first call IOC_IRQ is not set so we skip straight to the transfer
+    unsigned int mm2s_status = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
+    printf("[DMA] send_message #%d: MM2S status = 0x%08x\n", msgCount, mm2s_status);
+
     if (mm2s_status & STATUS_IOC_IRQ)
     {
         const int timeoutMs = getTimeoutMs();
@@ -175,7 +175,7 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
         {
             if (timeoutMs > 0 && now_mono_ms() > deadline)
             {
-                printf("[DMA] send_message: timed out waiting for idle\n");
+                printf("[DMA] send_message #%d: timed out waiting for idle\n", msgCount);
                 return ETIMEDOUT;
             }
         }
@@ -186,14 +186,15 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
     write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
     write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
 
-    printf("[DMA] send_message: starting transfer\n");
+    printf("[DMA] send_message #%d: starting transfer\n", msgCount);
     write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, 16);
-    printf("[DMA] send_message: waiting for MM2S sync...\n");
+    printf("[DMA] send_message #%d: waiting for MM2S sync...\n", msgCount);
 
     const int rc = dma_mm2s_sync(dma_virtual_addr);
-    printf("[DMA] send_message: sync returned %d\n", rc);
+    printf("[DMA] send_message #%d: sync returned %d\n", msgCount, rc);
     if (rc != 0) return static_cast<unsigned int>(rc);
 
+    msgCount++;
     return 0;
 }
 
