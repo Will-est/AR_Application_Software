@@ -429,26 +429,26 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Mat pendingTxFrame;
     bool hasPendingTx = false;
 
-    std::mutex rxMutex;
-    cv::Mat latestProcessedFrame;
-    bool hasProcessedFrame = false;
+    // std::mutex rxMutex;
+    // cv::Mat latestProcessedFrame;
+    // bool hasProcessedFrame = false;
 
-    std::thread rxThread([&]()
-    {
-        while (dmaRunning.load())
-        {
-            cv::Mat processed;
-            if (!receive_dma_frame(processed))
-            {
-                dmaRunning.store(false);
-                break;
-            }
+    // std::thread rxThread([&]()
+    // {
+    //     while (dmaRunning.load())
+    //     {
+    //         cv::Mat processed;
+    //         if (!receive_dma_frame(processed))
+    //         {
+    //             dmaRunning.store(false);
+    //             break;
+    //         }
 
-            std::lock_guard<std::mutex> lock(rxMutex);
-            latestProcessedFrame = processed;
-            hasProcessedFrame = true;
-        }
-    });
+    //         std::lock_guard<std::mutex> lock(rxMutex);
+    //         latestProcessedFrame = processed;
+    //         hasProcessedFrame = true;
+    //     }
+    // });
 
     std::thread txThread([&]()
     {
