@@ -339,8 +339,8 @@ int main(int argc, const char * argv[])
         cap.set(cv::CAP_PROP_FOURCC, fourcc);
         
         // Set FPS (camera default is 25 fps for OV9782)
-        cap.set(cv::CAP_PROP_FPS, 25);
-        
+        // cap.set(cv::CAP_PROP_FPS, 25);
+        cap.set(cv::CAP_PROP_FPS, 15);
         // Confirm what we actually got
         double actualWidth = cap.get(cv::CAP_PROP_FRAME_WIDTH);
         double actualHeight = cap.get(cv::CAP_PROP_FRAME_HEIGHT);
