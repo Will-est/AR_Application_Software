@@ -184,7 +184,7 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
 
     memcpy((void*)virtual_src_addr, buffer, 16);
     //write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
-    /write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+    //write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
 
     printf("[DMA] send_message #%d: starting transfer\n", msgCount);
     write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, 16);
