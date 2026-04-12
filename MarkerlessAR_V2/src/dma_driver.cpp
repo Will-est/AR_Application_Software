@@ -161,41 +161,69 @@ unsigned int send_message(const unsigned char* buffer, size_t length)
 {
     if (buffer == nullptr) return 1;
     if (length != 16) return 2;
+    if (!dma_virtual_addr || !virtual_src_addr) return ENODEV;
 
     static int msgCount = 0;
 
-    unsigned int mm2s_status = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
-    printf("[DMA] send_message #%d: MM2S status = 0x%08x\n", msgCount, mm2s_status);
-
-    if (mm2s_status & STATUS_IOC_IRQ)
+    auto reset_mm2s = [&]()
     {
-        const int timeoutMs = getTimeoutMs();
-        const uint64_t deadline = (timeoutMs > 0) ? (now_mono_ms() + static_cast<uint64_t>(timeoutMs)) : 0ULL;
-        while (!(read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER) & IDLE_FLAG))
-        {
-            if (timeoutMs > 0 && now_mono_ms() > deadline)
-            {
-                printf("[DMA] send_message #%d: timed out waiting for idle\n", msgCount);
-                return ETIMEDOUT;
-            }
-        }
+        printf("[DMA] send_message #%d: resetting MM2S and retrying once\n", msgCount);
+        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+        write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
         write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+    };
+
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        unsigned int mm2s_status = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
+        printf("[DMA] send_message #%d: MM2S status = 0x%08x (attempt %d)\n", msgCount, mm2s_status, attempt + 1);
+
+        if (mm2s_status & STATUS_IOC_IRQ)
+        {
+            const int timeoutMs = getTimeoutMs();
+            const uint64_t deadline = (timeoutMs > 0) ? (now_mono_ms() + static_cast<uint64_t>(timeoutMs)) : 0ULL;
+            while (!(read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER) & IDLE_FLAG))
+            {
+                if (timeoutMs > 0 && now_mono_ms() > deadline)
+                {
+                    printf("[DMA] send_message #%d: timed out waiting for idle\n", msgCount);
+                    if (attempt == 0 && read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER) == 0x00000000)
+                    {
+                        reset_mm2s();
+                        continue;
+                    }
+                    return ETIMEDOUT;
+                }
+            }
+            write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+        }
+
+        memcpy((void*)virtual_src_addr, buffer, 16);
+
+        printf("[DMA] send_message #%d: starting transfer\n", msgCount);
+        write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, 16);
+        printf("[DMA] send_message #%d: waiting for MM2S sync...\n", msgCount);
+
+        const int rc = dma_mm2s_sync(dma_virtual_addr);
+        printf("[DMA] send_message #%d: sync returned %d\n", msgCount, rc);
+        if (rc == 0)
+        {
+            msgCount++;
+            return 0;
+        }
+
+        const unsigned int afterStatus = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
+        if (attempt == 0 && afterStatus == 0x00000000)
+        {
+            reset_mm2s();
+            continue;
+        }
+
+        return static_cast<unsigned int>(rc);
     }
 
-    memcpy((void*)virtual_src_addr, buffer, 16);
-    //write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
-    //write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-
-    printf("[DMA] send_message #%d: starting transfer\n", msgCount);
-    write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, 16);
-    printf("[DMA] send_message #%d: waiting for MM2S sync...\n", msgCount);
-
-    const int rc = dma_mm2s_sync(dma_virtual_addr);
-    printf("[DMA] send_message #%d: sync returned %d\n", msgCount, rc);
-    if (rc != 0) return static_cast<unsigned int>(rc);
-
-    msgCount++;
-    return 0;
+    return EIO;
 }
 
 unsigned int receive_message(unsigned char* buffer, size_t length)
