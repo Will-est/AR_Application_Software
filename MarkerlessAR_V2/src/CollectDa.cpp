@@ -5,9 +5,11 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <cerrno>
 #include <fstream>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include <cstdio>
 #include <time.h>
@@ -106,6 +108,12 @@ struct Collector
 {
     std::mutex mu;
     std::ofstream out;
+    std::vector<char> outBuffer;
+
+    bool configLoaded = false;
+    std::chrono::milliseconds flushInterval{1000};
+    bool flushEachRow = true;
+    bool enableProcStats = true;
 
     SteadyClock::time_point lastFlush = SteadyClock::now();
     SteadyClock::time_point lastArrival{};
@@ -124,8 +132,47 @@ struct Collector
     double lastCpuSec = processCpuSeconds();
 #endif
 
+    static long readEnvLong(const char* name, long fallback)
+    {
+        const char* raw = std::getenv(name);
+        if (!raw || !*raw)
+            return fallback;
+
+        errno = 0;
+        char* end = nullptr;
+        const long parsed = std::strtol(raw, &end, 10);
+        if (errno != 0 || end == raw)
+            return fallback;
+        return parsed;
+    }
+
+    void loadConfigIfNeeded()
+    {
+        if (configLoaded)
+            return;
+        configLoaded = true;
+
+        long intervalMs = readEnvLong("AR_COLLECTDA_INTERVAL_MS", 1000);
+        if (intervalMs < 50)
+            intervalMs = 50;
+        if (intervalMs > 60000)
+            intervalMs = 60000;
+        flushInterval = std::chrono::milliseconds(intervalMs);
+
+        flushEachRow = readEnvLong("AR_COLLECTDA_FLUSH", 1) != 0;
+        enableProcStats = readEnvLong("AR_COLLECTDA_PROC", 1) != 0;
+
+        long bufferKb = readEnvLong("AR_COLLECTDA_BUFFER_KB", 256);
+        if (bufferKb < 0)
+            bufferKb = 0;
+        if (bufferKb > 4096)
+            bufferKb = 4096;
+        outBuffer.resize(static_cast<size_t>(bufferKb) * 1024u);
+    }
+
     void openIfNeeded()
     {
+        loadConfigIfNeeded();
         if (out.is_open())
             return;
 
@@ -141,6 +188,9 @@ struct Collector
         out.open(outPath.c_str(), std::ios::out | std::ios::app);
         if (!out.is_open())
             return;
+
+        if (!outBuffer.empty())
+            out.rdbuf()->pubsetbuf(outBuffer.data(), static_cast<std::streamsize>(outBuffer.size()));
 
         if (!fileExists)
         {
@@ -223,21 +273,28 @@ struct Collector
             return;
 
         const auto elapsed = now - lastFlush;
-        if (elapsed < std::chrono::seconds(1))
+        if (elapsed < flushInterval)
             return;
 
         const double wallSec = std::chrono::duration_cast<std::chrono::duration<double>>(elapsed).count();
         const double fps = wallSec > 0.0 ? (static_cast<double>(framesInterval) / wallSec) : 0.0;
 
 #if COLLECTDA
-        const double cpuSecNow = processCpuSeconds();
-        const double cpuDelta = cpuSecNow - lastCpuSec;
-        const double cpuPct = wallSec > 0.0 ? (100.0 * cpuDelta / wallSec) : 0.0;
-        lastCpuSec = cpuSecNow;
+        double cpuPct = 0.0;
+        long vmrssKb = -1;
+        long vmsizeKb = -1;
+        int threads = -1;
+        if (enableProcStats)
+        {
+            const double cpuSecNow = processCpuSeconds();
+            const double cpuDelta = cpuSecNow - lastCpuSec;
+            cpuPct = wallSec > 0.0 ? (100.0 * cpuDelta / wallSec) : 0.0;
+            lastCpuSec = cpuSecNow;
 
-        const long vmrssKb = readStatusKb("VmRSS");
-        const long vmsizeKb = readStatusKb("VmSize");
-        const int threads = readStatusInt("Threads");
+            vmrssKb = readStatusKb("VmRSS");
+            vmsizeKb = readStatusKb("VmSize");
+            threads = readStatusInt("Threads");
+        }
 #else
         const double cpuPct = 0.0;
         const long vmrssKb = -1;
@@ -275,7 +332,8 @@ struct Collector
             << maxMs(arrivalToPreprocessEnd) << ','
             << patternsPerSec << ','
             << framesTotal << '\n';
-        out.flush();
+        if (flushEachRow)
+            out.flush();
 
         framesInterval = 0;
         patternsFoundInterval = 0;

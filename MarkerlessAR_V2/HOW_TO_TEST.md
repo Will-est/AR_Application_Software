@@ -77,6 +77,22 @@ export AR_COLLECTDA_PATH=/tmp/ar_collectda.csv
 ./build_collectda/src/ARProject.out Artifacts/pattern.png
 ```
 
+Logging/overhead tuning env vars (all optional):
+
+```bash
+export AR_COLLECTDA_INTERVAL_MS=1000   # default 1000; larger = fewer writes/less overhead
+export AR_COLLECTDA_FLUSH=1            # default 1; set 0 to avoid fflush each row
+export AR_COLLECTDA_PROC=1             # default 1; set 0 to skip /proc + CPU% sampling
+export AR_COLLECTDA_BUFFER_KB=256      # default 256; larger = fewer syscalls
+```
+
+What each parameter means:
+
+- `AR_COLLECTDA_INTERVAL_MS` (milliseconds, default `1000`): minimum time between CSV rows. Metrics are aggregated over this window, then reset after the row is written. Increasing it reduces logging overhead but makes the rows less “responsive” to short spikes.
+- `AR_COLLECTDA_FLUSH` (`0`/`1`, default `1`): when `1`, forces a flush after every row (lower risk of losing data on crash, higher overhead). When `0`, relies on buffering/OS flush; call `collectda::shutdown()` or exit cleanly to flush remaining data.
+- `AR_COLLECTDA_PROC` (`0`/`1`, default `1`): when `1`, samples process CPU% and parses `/proc/self/status` for memory/thread stats each row. When `0`, sets `cpu_pct=0` and `vmrss_kb/vmsize_kb/threads=-1` to avoid that overhead.
+- `AR_COLLECTDA_BUFFER_KB` (kilobytes, default `256`): size of the stream buffer used for the CSV file. Larger buffers reduce write syscalls (less overhead) but may delay how quickly rows appear in `tail -f` unless `AR_COLLECTDA_FLUSH=1`.
+
 Watch the log:
 
 ```bash
@@ -95,4 +111,3 @@ Sanity checks:
 - **No CSV output with `COLLECTDA`**:
   - Ensure you built with `-DCOLLECTDA=ON`.
   - Ensure `AR_COLLECTDA_PATH` is writable (or omit it to write `ARProject_collectda.csv` in the current directory).
-
