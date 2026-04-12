@@ -691,9 +691,11 @@ bool send_dma_frame(const cv::Mat& currentFrame)
 
             const unsigned int rc = send_message(message, sizeof(message));
             if (rc != 0)
-            {
+            {          
                 std::cerr << "[DMA] send_message failed rc=" << rc
-                          << " at msg " << msgNum << std::endl;
+                        << " at msg " << msgNum 
+                        << " row=" << row 
+                        << " col=" << col << std::endl;
                 return false;
             }
 
