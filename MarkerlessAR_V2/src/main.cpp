@@ -12,6 +12,7 @@
 // File includes:
 #include "ARDrawingContext.hpp"
 #include "ARPipeline.hpp"
+#include "CollectDa.hpp"
 #include "DebugHelpers.hpp"
 
 // Standard includes:
@@ -376,6 +377,8 @@ int main(int argc, const char * argv[])
 
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture)
 {
+    collectda::init();
+
     // Grab first frame to get the frame dimensions
     cv::Mat currentFrame;
     capture >> currentFrame;
@@ -408,7 +411,15 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             continue;
         }
 
+        collectda::onFrameArrival();
+
+        const auto frameStart = std::chrono::steady_clock::now();
         shouldQuit = processFrame(currentFrame, pipeline, drawingCtx);
+        const auto frameEnd = std::chrono::steady_clock::now();
+        const auto frameUs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count());
+        collectda::onFrameProcessedUs(frameUs);
+
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -419,6 +430,8 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
                 nextFrameDeadline = now;
         }
     } while (!shouldQuit);
+
+    collectda::shutdown();
 }
 
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image)
@@ -465,6 +478,7 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
 
     // Find a pattern and update it's detection status:
     drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);
+    collectda::onPatternFound(drawingCtx.isPatternPresent);
 
     // Update a pattern pose:
     drawingCtx.patternPose = pipeline.getPatternLocation();

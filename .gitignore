@@ -34,6 +34,8 @@
 # Everything that gets built
 MarkerlessAR_V1/build/
 MarkerlessAR_V2/build/
+MarkerlessAR_V2/build_local/
+MarkerlessAR_V2/build_collectda/
 
 # any random vscode stuff
 /.vscode/
