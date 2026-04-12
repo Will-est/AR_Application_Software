@@ -14,7 +14,7 @@
 #define DMA_TRANSFER_SIZE     16
 #define DMA_DEFAULT_TIMEOUT_MS 60000
 
-#define AXI_LITE_ADDR         0xA0000000
+#define AXI_LITE_ADDR         0xA0000000UL
 
 #define MM2S_CONTROL_REGISTER       0x00
 #define MM2S_STATUS_REGISTER        0x04

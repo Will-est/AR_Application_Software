@@ -250,15 +250,15 @@ int dma_init(void)
         return -1;
     }
 
-    dma_virtual_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, AXI_LITE_ADDR);
+    dma_virtual_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, (off_t)AXI_LITE_ADDR);
     if (dma_virtual_addr == MAP_FAILED) { perror("[DMA] mmap dma_virtual_addr failed"); return -1; }
     printf("[DMA] dma_virtual_addr mapped OK\n");
 
-    virtual_src_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, SOURCE_ADDR);
+    virtual_src_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, (off_t)SOURCE_ADDR);
     if (virtual_src_addr == MAP_FAILED) { perror("[DMA] mmap virtual_src_addr failed"); return -1; }
     printf("[DMA] virtual_src_addr mapped OK\n");
 
-    virtual_dst_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, DESTINATION_ADDR);
+    virtual_dst_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, (off_t)DESTINATION_ADDR);
     if (virtual_dst_addr == MAP_FAILED) { perror("[DMA] mmap virtual_dst_addr failed"); return -1; }
     printf("[DMA] virtual_dst_addr mapped OK\n");
 
