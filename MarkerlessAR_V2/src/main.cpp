@@ -433,22 +433,22 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
 
-    // std::thread rxThread([&]()
-    // {
-    //     while (dmaRunning.load())
-    //     {
-    //         cv::Mat processed;
-    //         if (!receive_dma_frame(processed))
-    //         {
-    //             dmaRunning.store(false);
-    //             break;
-    //         }
+    std::thread rxThread([&]()
+    {
+        while (dmaRunning.load())
+        {
+            cv::Mat processed;
+            if (!receive_dma_frame(processed))
+            {
+                dmaRunning.store(false);
+                break;
+            }
 
-    //         std::lock_guard<std::mutex> lock(rxMutex);
-    //         latestProcessedFrame = processed;
-    //         hasProcessedFrame = true;
-    //     }
-    // });
+            std::lock_guard<std::mutex> lock(rxMutex);
+            latestProcessedFrame = processed;
+            hasProcessedFrame = true;
+        }
+    });
 
     std::thread txThread([&]()
     {
@@ -539,7 +539,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     dmaRunning.store(false);
     txCv.notify_all();
     txThread.join();
-    // rxThread.join();
+    rxThread.join();
 }
 
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image)
