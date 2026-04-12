@@ -1,5 +1,7 @@
 #include "CollectDa.hpp"
 
+#if COLLECTDA
+
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -7,15 +9,12 @@
 #include <mutex>
 #include <string>
 
-#if COLLECTDA
 #include <cstdio>
 #include <time.h>
 #include <unistd.h>
-#endif
 
 namespace collectda
 {
-#if COLLECTDA
 namespace
 {
 using SteadyClock = std::chrono::steady_clock;
@@ -326,12 +325,6 @@ void onPreprocessUs(std::uint64_t us)
 {
     collector().onPreprocessDone(us);
 }
-#else
-void init() {}
-void shutdown() {}
-void onFrameArrival() {}
-void onFrameProcessedUs(std::uint64_t) {}
-void onPatternFound(bool) {}
-void onPreprocessUs(std::uint64_t) {}
-#endif
 } // namespace collectda
+
+#endif // COLLECTDA

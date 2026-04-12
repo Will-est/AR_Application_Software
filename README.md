@@ -4,6 +4,26 @@ In this project readers will learn how to create a standard real-time project us
 
 See the related **[Medium post](https://medium.com/@ahmetozlu93/marker-less-augmented-reality-by-opencv-and-opengl-531b2af0a130)** for more information!
 
+## Quick Start (MarkerlessAR_V2)
+
+Build:
+
+```bash
+cmake -S MarkerlessAR_V2 -B MarkerlessAR_V2/build
+cmake --build MarkerlessAR_V2/build -j 4 --target ARProject
+```
+
+Run (camera):
+
+```bash
+cd MarkerlessAR_V2
+./build/src/ARProject.out Artifacts/pattern.png
+```
+
+Notes:
+- If CMake can’t find your OpenCV, update `MarkerlessAR_V2/CMakeLists.txt` (`OpenCV_DIR`) for your machine.
+- For detailed manual test steps (camera/video, `COLLECTDA` logging CSV), see `MarkerlessAR_V2/HOW_TO_TEST.md`.
+
 ## Quick Demo
 
 - *MarkerlessAR_V1*

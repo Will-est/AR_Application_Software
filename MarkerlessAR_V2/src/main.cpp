@@ -377,7 +377,9 @@ int main(int argc, const char * argv[])
 
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture)
 {
+#if COLLECTDA
     collectda::init();
+#endif
 
     // Grab first frame to get the frame dimensions
     cv::Mat currentFrame;
@@ -411,14 +413,18 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             continue;
         }
 
+#if COLLECTDA
         collectda::onFrameArrival();
+#endif
 
         const auto frameStart = std::chrono::steady_clock::now();
         shouldQuit = processFrame(currentFrame, pipeline, drawingCtx);
+#if COLLECTDA
         const auto frameEnd = std::chrono::steady_clock::now();
         const auto frameUs = static_cast<std::uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count());
         collectda::onFrameProcessedUs(frameUs);
+#endif
 
         if (!shouldQuit)
         {
@@ -431,7 +437,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         }
     } while (!shouldQuit);
 
+#if COLLECTDA
     collectda::shutdown();
+#endif
 }
 
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image)
@@ -478,7 +486,9 @@ bool processFrame(const cv::Mat& cameraFrame, ARPipeline& pipeline, ARDrawingCon
 
     // Find a pattern and update it's detection status:
     drawingCtx.isPatternPresent = pipeline.processFrame(cameraFrame);
+#if COLLECTDA
     collectda::onPatternFound(drawingCtx.isPatternPresent);
+#endif
 
     // Update a pattern pose:
     drawingCtx.patternPose = pipeline.getPatternLocation();
