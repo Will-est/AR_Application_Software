@@ -8,7 +8,7 @@
 --- Demo Video     : https://www.youtube.com/watch?v=nPfR5ACrqu0
 ---------------------------------------------------------------------
 */
-
+#define COLLECTDA 1
 // File includes:
 #include "ARDrawingContext.hpp"
 #include "ARPipeline.hpp"

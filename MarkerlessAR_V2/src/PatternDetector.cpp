@@ -8,7 +8,7 @@
 --- Demo Video     : https://www.youtube.com/watch?v=nPfR5ACrqu0
 ---------------------------------------------------------------------
 */
-
+#define COLLECTDA 1
 // File includes:
 #include "PatternDetector.hpp"
 #include "CollectDa.hpp"
@@ -92,18 +92,18 @@ void PatternDetector::buildPatternFromImage(const cv::Mat& image, Pattern& patte
 bool PatternDetector::findPattern(const cv::Mat& image, PatternTrackingInfo& info)
 {
     // Convert input image to gray
-#if COLLECTDA
-    const auto preStart = std::chrono::steady_clock::now();
-#endif
-    getGray(image, m_grayImg);
-    // gaussian the image (blur the grayscale image, not the color input)
-    cv::GaussianBlur(m_grayImg, m_grayImg, cv::Size(5,5), 0);
-#if COLLECTDA
-    const auto preEnd = std::chrono::steady_clock::now();
-    const auto preUs = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(preEnd - preStart).count());
-    collectda::onPreprocessUs(preUs);
-#endif
+    #if COLLECTDA
+        const auto preStart = std::chrono::steady_clock::now();
+    #endif
+        getGray(image, m_grayImg);
+        // gaussian the image (blur the grayscale image, not the color input)
+        cv::GaussianBlur(m_grayImg, m_grayImg, cv::Size(5,5), 0);
+    #if COLLECTDA
+        const auto preEnd = std::chrono::steady_clock::now();
+        const auto preUs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(preEnd - preStart).count());
+        collectda::onPreprocessUs(preUs);
+    #endif
 
     extractFeatures(m_grayImg, m_queryKeypoints, m_queryDescriptors);
     
