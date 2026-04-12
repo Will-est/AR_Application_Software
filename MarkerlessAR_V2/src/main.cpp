@@ -429,9 +429,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Mat pendingTxFrame;
     bool hasPendingTx = false;
 
-    // std::mutex rxMutex;
-    // cv::Mat latestProcessedFrame;
-    // bool hasProcessedFrame = false;
+    std::mutex rxMutex;
+    cv::Mat latestProcessedFrame;
+    bool hasProcessedFrame = false;
 
     // std::thread rxThread([&]()
     // {
@@ -539,7 +539,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     dmaRunning.store(false);
     txCv.notify_all();
     txThread.join();
-    rxThread.join();
+    // rxThread.join();
 }
 
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image)
