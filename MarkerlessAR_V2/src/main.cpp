@@ -780,66 +780,88 @@ int receive_dma_frame(cv::Mat& grayFrame)
 {
     grayFrame.create(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
 
-    // RX format:
-    // - For each row: 16-byte header (id increments 0,1,2,...) + 640 bytes grayscale payload
-    // - Stream itself may be delivered as 16-byte bursts, but we receive the whole row in one S2MM DMA transfer
-    //   to avoid re-arming/waiting between bursts.
+    // RX format (1 row out per DMA transaction):
+    // - 16-byte header (row id)
+    // - 1 row grayscale payload (CAM_WIDTH bytes, 1 byte per pixel)
     constexpr int headerBytes = 16;
-    constexpr int payloadBytes = CAM_WIDTH; // 1 byte per pixel
-    constexpr int rowBytes = headerBytes + payloadBytes; // 656
+    constexpr int payloadBytes = CAM_WIDTH;
+    constexpr int rowBytes = headerBytes + payloadBytes; // 656 for 640-wide
     static_assert((rowBytes % 16) == 0, "row transfer must be 16B aligned");
 
-    const bool strictHeaders = getEnvFlag("AR_DMA_STRICT_HEADERS");
-    int headerMismatchCount = 0;
-
     std::uint8_t* rx = reinterpret_cast<std::uint8_t*>(virtual_dst_addr);
+
+    auto resetAndRunS2mm = [&]()
+    {
+        using Clock = std::chrono::steady_clock;
+        write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RESET_DMA);
+        const auto deadline = Clock::now() + std::chrono::milliseconds(50);
+        while ((read_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER) & RESET_DMA) != 0)
+        {
+            if (Clock::now() > deadline)
+                break;
+        }
+        write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+    };
+
+    int headerMismatchCount = 0;
 
     for (int row = 0; row < CAM_HEIGHT; ++row)
     {
         std::uint8_t* dstRow = grayFrame.ptr<std::uint8_t>(row);
 
-        // Arm S2MM for one full row (header+payload) and wait once.
-        // Clear any stale IRQ bits before arming a new receive.
+        auto startS2mmTransfer = [&]()
+        {
+            write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+            write_dma(dma_virtual_addr, S2MM_DST_ADDRESS_REGISTER, DESTINATION_ADDR);
+            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            write_dma(dma_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, rowBytes);
+            return dma_s2mm_sync(dma_virtual_addr);
+        };
+
         const unsigned int s2mmStatus = read_dma(dma_virtual_addr, S2MM_STATUS_REGISTER);
         if (s2mmStatus & STATUS_HALTED)
         {
-            std::cerr << "[DMA] receive_dma_frame: S2MM halted, resetting" << std::endl;
-            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RESET_DMA);
-            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            std::cerr << "[DMA] receive_dma_frame: S2MM halted before row " << row << ", resetting" << std::endl;
+            resetAndRunS2mm();
         }
 
-        write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
-        write_dma(dma_virtual_addr, S2MM_DST_ADDRESS_REGISTER, DESTINATION_ADDR);
-        write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-        write_dma(dma_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, rowBytes);
-
-        const int rc = dma_s2mm_sync(dma_virtual_addr);
+        int rc = startS2mmTransfer();
         if (rc != 0)
         {
-            std::cerr << "[DMA] receive_dma_frame: row " << row << " failed rc=" << rc << std::endl;
-            return rc;
+            std::cerr << "[DMA] receive_dma_frame: row " << row
+                      << " failed rc=" << rc << " (retrying once)" << std::endl;
+            resetAndRunS2mm();
+            rc = startS2mmTransfer();
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] receive_dma_frame: row " << row
+                          << " retry failed rc=" << rc << std::endl;
+                return rc;
+            }
         }
 
-        // Header id can be encoded as either 8-bit (byte0) or 16-bit LE (byte0..1).
+        if (row == 0)
+        {
+            printf("[DMA] receive_dma_frame: row0 header bytes: ");
+            print_mem(rx, headerBytes);
+        }
+
         const uint16_t headerId16 = static_cast<uint16_t>(rx[0]) | (static_cast<uint16_t>(rx[1]) << 8);
         const uint8_t headerId8 = rx[0];
         const uint16_t expected16 = static_cast<uint16_t>(row);
         const uint8_t expected8 = static_cast<uint8_t>(row & 0xFF);
-
         if (!(headerId16 == expected16 || headerId8 == expected8))
         {
             ++headerMismatchCount;
             std::cerr << "[DMA] warning: row header id=" << headerId16
                       << " (byte0=" << static_cast<int>(headerId8) << ") expected "
                       << expected16 << " at row " << row << std::endl;
-            if (strictHeaders && headerMismatchCount > 5)
-                return false;
         }
 
         std::memcpy(dstRow, rx + headerBytes, payloadBytes);
     }
 
-    if (!strictHeaders && headerMismatchCount > 0)
+    if (headerMismatchCount > 0)
     {
         std::cerr << "[DMA] frame received with row-header mismatches: " << headerMismatchCount << std::endl;
     }
