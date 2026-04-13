@@ -138,11 +138,11 @@ void writeColorHexdump(std::ostream& output, const cv::Mat& colorImage)
     output << "Color image (BGR): " << contiguous.cols << "x" << contiguous.rows
            << " (" << byteCount << " bytes)" << std::endl;
 
-    for (size_t offset = 0; offset < byteCount; offset += 16)
+    for (size_t offset = 0; offset < byteCount; offset += DMA_TRANSFER_SIZE)
     {
         output << std::setfill('0') << std::setw(8) << std::hex << offset << "  ";
 
-        for (size_t index = 0; index < 16; ++index)
+        for (size_t index = 0; index < DMA_TRANSFER_SIZE; ++index)
         {
             if (offset + index < byteCount)
             {
@@ -156,7 +156,7 @@ void writeColorHexdump(std::ostream& output, const cv::Mat& colorImage)
         }
 
         output << " ";
-        for (size_t index = 0; index < 16 && offset + index < byteCount; ++index)
+        for (size_t index = 0; index < DMA_TRANSFER_SIZE && offset + index < byteCount; ++index)
         {
             const unsigned char value = bytes[offset + index];
             output << (std::isprint(value) ? static_cast<char>(value) : '.');
@@ -179,11 +179,11 @@ void writeHexdump(std::ostream& output, const cv::Mat& grayImage)
     output << "Grayscale image: " << contiguous.cols << "x" << contiguous.rows
            << " (" << byteCount << " bytes)" << std::endl;
 
-    for (size_t offset = 0; offset < byteCount; offset += 16)
+    for (size_t offset = 0; offset < byteCount; offset += DMA_TRANSFER_SIZE)
     {
         output << std::setfill('0') << std::setw(8) << std::hex << offset << "  ";
 
-        for (size_t index = 0; index < 16; ++index)
+        for (size_t index = 0; index < DMA_TRANSFER_SIZE; ++index)
         {
             if (offset + index < byteCount)
             {
@@ -197,7 +197,7 @@ void writeHexdump(std::ostream& output, const cv::Mat& grayImage)
         }
 
         output << " ";
-        for (size_t index = 0; index < 16 && offset + index < byteCount; ++index)
+        for (size_t index = 0; index < DMA_TRANSFER_SIZE && offset + index < byteCount; ++index)
         {
             const unsigned char value = bytes[offset + index];
             output << (std::isprint(value) ? static_cast<char>(value) : '.');
@@ -440,6 +440,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         return;
     }
     log_breath("POST-INIT");
+    
 
     cv::Size frameSize(CAM_WIDTH, CAM_HEIGHT);
 
@@ -860,12 +861,12 @@ bool send_dma_frame(const cv::Mat& currentFrame)
 
     constexpr int blockRows = 5;
     constexpr int bytesPerPixel = 3;
-    constexpr int headerBytes = 16;
+    constexpr int headerBytes = DMA_TRANSFER_SIZE;
     constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
     constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616
 
-    static_assert((payloadBytesPerBlock % 16) == 0, "5-row payload must be 16B aligned");
-    static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
+    static_assert((payloadBytesPerBlock % DMA_TRANSFER_SIZE) == 0, "5-row payload must be 16B aligned");
+    static_assert((transferBytesPerBlock % DMA_TRANSFER_SIZE) == 0, "transfer size must be 16B aligned");
     static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 5");
 
     uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
@@ -929,10 +930,10 @@ int receive_dma_frame(cv::Mat& grayFrame)
 {
     grayFrame.create(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
 
-    constexpr int headerBytes = 16;
+    constexpr int headerBytes = DMA_TRANSFER_SIZE;
     constexpr int payloadBytes = CAM_WIDTH;
     constexpr int rowBytes = headerBytes + payloadBytes; // 656
-    static_assert((rowBytes % 16) == 0, "row transfer must be 16B aligned");
+    static_assert((rowBytes % DMA_TRANSFER_SIZE) == 0, "row transfer must be 16B aligned");
 
     std::uint8_t* rx = reinterpret_cast<std::uint8_t*>(virtual_dst_addr);
 
