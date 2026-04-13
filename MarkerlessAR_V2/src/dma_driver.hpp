@@ -56,6 +56,7 @@
 extern unsigned int *virtual_dst_addr;
 extern unsigned int *virtual_src_addr;
 extern unsigned int *dma_virtual_addr;
+extern unsigned int *accel_virtual_addr;
 
 
 int dma_init(void);

@@ -6,6 +6,7 @@
 unsigned int *virtual_dst_addr;
 unsigned int *virtual_src_addr;
 unsigned int *dma_virtual_addr;
+unsigned int *accel_virtual_addr;
 
 namespace
 {
@@ -295,6 +296,11 @@ int dma_init(void)
     virtual_dst_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, (off_t)DESTINATION_ADDR);
     if (virtual_dst_addr == MAP_FAILED) { perror("[DMA] mmap virtual_dst_addr failed"); return -1; }
     printf("[DMA] virtual_dst_addr mapped OK\n");
+
+    accel_virtual_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, (off_t)AXI_LITE_ADDR);
+    if (accel_virtual_addr == MAP_FAILED) { perror("[DMA] mmap accel_virtual_addr failed"); return -1; }
+    printf("[DMA] accel_virtual_addr mapped OK\n");
+
 
     // Write known pattern to src so we can verify MM2S is reading real data
     virtual_src_addr[0] = 0xEFBEADDE;
