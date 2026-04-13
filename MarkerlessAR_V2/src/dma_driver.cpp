@@ -303,15 +303,15 @@ int dma_init(void)
 
 
     // Write known pattern to src so we can verify MM2S is reading real data
-    virtual_src_addr[0] = 0xEFBEADDE;
-    virtual_src_addr[1] = 0x11223344;
-    virtual_src_addr[2] = 0xABABABAB;
-    virtual_src_addr[3] = 0xCDCDCDCD;
-    virtual_src_addr[4] = 0x00001111;
-    virtual_src_addr[5] = 0x22223333;
-    virtual_src_addr[6] = 0x44445555;
-    virtual_src_addr[7] = 0x66667777;
-    memset(virtual_dst_addr, 0, 32);
+    // virtual_src_addr[0] = 0xEFBEADDE;
+    // virtual_src_addr[1] = 0x11223344;
+    // virtual_src_addr[2] = 0xABABABAB;
+    // virtual_src_addr[3] = 0xCDCDCDCD;
+    // virtual_src_addr[4] = 0x00001111;
+    // virtual_src_addr[5] = 0x22223333;
+    // virtual_src_addr[6] = 0x44445555;
+    // virtual_src_addr[7] = 0x66667777;
+    // memset(virtual_dst_addr, 0, 32);
 
     printf("[DMA] init: resetting DMA\n");
     write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RESET_DMA);
