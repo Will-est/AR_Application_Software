@@ -704,18 +704,36 @@ bool send_dma_frame(const cv::Mat& currentFrame)
             payloadOffset += static_cast<size_t>(CAM_WIDTH * bytesPerPixel);
         }
 
-        // Send header + payload as one MM2S DMA transaction (9616 bytes)
-        write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
-        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-        write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
+        auto startMm2sTransfer = [&]()
+        {
+            // Clear any stale IRQ bits, then start the transfer.
+            write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+            write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
+            return dma_mm2s_sync(dma_virtual_addr);
+        };
 
-        const int rc = dma_mm2s_sync(dma_virtual_addr);
+        // Send header + payload as one MM2S DMA transaction (9616 bytes).
+        int rc = startMm2sTransfer();
         if (rc != 0)
         {
             std::cerr << "[DMA] send_dma_frame: block " << blockIndex
                       << " (rows " << startRow << "-" << (startRow + blockRows - 1)
-                      << ") failed rc=" << rc << std::endl;
-            return false;
+                      << ") failed rc=" << rc << " (retrying once)" << std::endl;
+
+            // One retry with an MM2S reset. This helps recover from occasional stuck states/timeouts.
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+
+            rc = startMm2sTransfer();
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] send_dma_frame: block " << blockIndex
+                          << " (rows " << startRow << "-" << (startRow + blockRows - 1)
+                          << ") retry failed rc=" << rc << std::endl;
+                return false;
+            }
         }
         printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
     }
