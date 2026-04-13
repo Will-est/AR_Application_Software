@@ -703,139 +703,41 @@ static void configureImageOverlay(ARDrawingContext& drawingCtx)
     std::cout << "Image overlay enabled: " << resolvedPath << std::endl;
 }
 
-bool send_dma_frame(const cv::Mat& currentFrame)
-{
-    if (currentFrame.empty())
-    {
-        std::cerr << "[DMA] send_dma_frame: invalid input frame (empty)" << std::endl;
-        return false;
-    }
-
-    static std::atomic<unsigned long long> totalAttempts{0};
-    static std::atomic<unsigned long long> totalSendsOk{0};
-    static std::atomic<unsigned long long> consecutiveSendsOk{0};
-
-    if (!dma_virtual_addr || !virtual_src_addr)
-    {
-        std::cerr << "[DMA] send_dma_frame: DMA not initialized" << std::endl;
-        return false;
-    }
-
-    constexpr int payloadBytesPerBlock = 128;
-    constexpr int transferBytesPerBlock = payloadBytesPerBlock;
-
-    static_assert((payloadBytesPerBlock % 16) == 0, "payload must be 16B aligned");
-    static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
-
-    std::uint8_t* src = reinterpret_cast<std::uint8_t*>(virtual_src_addr);
-
-    if (accel_virtual_addr)
-        accel_virtual_addr[0] = 1;
-
-    constexpr int blockCount = 1;
-    for (int blockIndex = 0; blockIndex < blockCount; ++blockIndex)
-    {
-        const unsigned long long attemptIndex = totalAttempts.fetch_add(1) + 1;
-        for (int i = 0; i < payloadBytesPerBlock; ++i)
-            src[i] = static_cast<std::uint8_t>((blockIndex + i) & 0xFF);
-
-        auto startMm2sTransfer = [&]()
-        {
-            write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
-            write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
-            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
-            return dma_mm2s_sync(dma_virtual_addr);
-        };
-
-        int rc = startMm2sTransfer();
-        if (rc != 0)
-        {
-            const auto streak = consecutiveSendsOk.load();
-            const auto total = totalSendsOk.load();
-            std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
-                      << " first-attempt failed rc=" << rc
-                      << " (attempt=" << attemptIndex
-                      << ", ok-streak=" << streak
-                      << ", ok-total=" << total
-                      << ", resetting streak + retrying once)" << std::endl;
-            consecutiveSendsOk.store(0);
-
-            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
-            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-
-            rc = startMm2sTransfer();
-            if (rc != 0)
-            {
-                const auto streak = consecutiveSendsOk.load();
-                const auto total = totalSendsOk.load();
-                std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
-                          << " retry failed rc=" << rc
-                          << " (attempt=" << attemptIndex
-                          << " (ok-streak=" << streak
-                          << ", ok-total=" << total << ")" << std::endl;
-                log_breath("MM2S-DUMMY-RETRY-FAIL");
-                return false;
-            }
-        }
-
-        const unsigned long long totalOk = totalSendsOk.fetch_add(1) + 1;
-        const unsigned long long streakOk = consecutiveSendsOk.fetch_add(1) + 1;
-        printf("[DMA] send_dma_frame: dummy block %d sent OK (%d bytes) (attempt=%llu ok-streak=%llu ok-total=%llu)\n",
-               blockIndex,
-               transferBytesPerBlock,
-               attemptIndex,
-               streakOk,
-               totalOk);
-    }
-
-    log_breath("TX-DUMMY-DONE");
-    std::cout << "[DMA] send_dma_frame: sent dummy payload successfully" << std::endl;
-    return true;
-}
-
 // bool send_dma_frame(const cv::Mat& currentFrame)
 // {
-//     if (currentFrame.empty() || currentFrame.type() != CV_8UC3)
+//     if (currentFrame.empty())
 //     {
-//         std::cerr << "[DMA] send_dma_frame: invalid input frame (need CV_8UC3)" << std::endl;
+//         std::cerr << "[DMA] send_dma_frame: invalid input frame (empty)" << std::endl;
 //         return false;
 //     }
 
-//     cv::Mat frame;
-//     if (currentFrame.cols != CAM_WIDTH || currentFrame.rows != CAM_HEIGHT)
-//         cv::resize(currentFrame, frame, cv::Size(CAM_WIDTH, CAM_HEIGHT));
-//     else
-//         frame = currentFrame;
+//     static std::atomic<unsigned long long> totalAttempts{0};
+//     static std::atomic<unsigned long long> totalSendsOk{0};
+//     static std::atomic<unsigned long long> consecutiveSendsOk{0};
 
-//     constexpr int blockRows = 5;
-//     constexpr int bytesPerPixel = 3;
-//     constexpr int headerBytes = 16;
-//     constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
-//     constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616
-
-//     static_assert((payloadBytesPerBlock % 16) == 0, "5-row payload must be 16B aligned");
-//     static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
-//     static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 5");
-
-//     uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
-
-//      accel_virtual_addr[0] = 1;
-
-//     int blockIndex = 0;
-//     for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
+//     if (!dma_virtual_addr || !virtual_src_addr)
 //     {
-//         std::memset(src, 0, headerBytes);
-//         src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
+//         std::cerr << "[DMA] send_dma_frame: DMA not initialized" << std::endl;
+//         return false;
+//     }
 
-//         uint8_t* payload = src + headerBytes;
-//         size_t payloadOffset = 0;
-//         for (int r = 0; r < blockRows; ++r)
-//         {
-//             const uint8_t* rowBytes = frame.ptr<uint8_t>(startRow + r);
-//             std::memcpy(payload + payloadOffset, rowBytes, static_cast<size_t>(CAM_WIDTH * bytesPerPixel));
-//             payloadOffset += static_cast<size_t>(CAM_WIDTH * bytesPerPixel);
-//         }
+//     constexpr int payloadBytesPerBlock = 128;
+//     constexpr int transferBytesPerBlock = payloadBytesPerBlock;
+
+//     static_assert((payloadBytesPerBlock % 16) == 0, "payload must be 16B aligned");
+//     static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
+
+//     std::uint8_t* src = reinterpret_cast<std::uint8_t*>(virtual_src_addr);
+
+//     if (accel_virtual_addr)
+//         accel_virtual_addr[0] = 1;
+
+//     constexpr int blockCount = 1;
+//     for (int blockIndex = 0; blockIndex < blockCount; ++blockIndex)
+//     {
+//         const unsigned long long attemptIndex = totalAttempts.fetch_add(1) + 1;
+//         for (int i = 0; i < payloadBytesPerBlock; ++i)
+//             src[i] = static_cast<std::uint8_t>((blockIndex + i) & 0xFF);
 
 //         auto startMm2sTransfer = [&]()
 //         {
@@ -849,9 +751,15 @@ bool send_dma_frame(const cv::Mat& currentFrame)
 //         int rc = startMm2sTransfer();
 //         if (rc != 0)
 //         {
-//             std::cerr << "[DMA] send_dma_frame: block " << blockIndex
-//                       << " (rows " << startRow << "-" << (startRow + blockRows - 1)
-//                       << ") failed rc=" << rc << " (retrying once)" << std::endl;
+//             const auto streak = consecutiveSendsOk.load();
+//             const auto total = totalSendsOk.load();
+//             std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
+//                       << " first-attempt failed rc=" << rc
+//                       << " (attempt=" << attemptIndex
+//                       << ", ok-streak=" << streak
+//                       << ", ok-total=" << total
+//                       << ", resetting streak + retrying once)" << std::endl;
+//             consecutiveSendsOk.store(0);
 
 //             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
 //             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
@@ -859,20 +767,112 @@ bool send_dma_frame(const cv::Mat& currentFrame)
 //             rc = startMm2sTransfer();
 //             if (rc != 0)
 //             {
-//                 std::cerr << "[DMA] send_dma_frame: block " << blockIndex
-//                           << " (rows " << startRow << "-" << (startRow + blockRows - 1)
-//                           << ") retry failed rc=" << rc << std::endl;
-//                 log_breath("MM2S-RETRY-FAIL");
+//                 const auto streak = consecutiveSendsOk.load();
+//                 const auto total = totalSendsOk.load();
+//                 std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
+//                           << " retry failed rc=" << rc
+//                           << " (attempt=" << attemptIndex
+//                           << " (ok-streak=" << streak
+//                           << ", ok-total=" << total << ")" << std::endl;
+//                 log_breath("MM2S-DUMMY-RETRY-FAIL");
 //                 return false;
 //             }
 //         }
-//         printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
+
+//         const unsigned long long totalOk = totalSendsOk.fetch_add(1) + 1;
+//         const unsigned long long streakOk = consecutiveSendsOk.fetch_add(1) + 1;
+//         printf("[DMA] send_dma_frame: dummy block %d sent OK (%d bytes) (attempt=%llu ok-streak=%llu ok-total=%llu)\n",
+//                blockIndex,
+//                transferBytesPerBlock,
+//                attemptIndex,
+//                streakOk,
+//                totalOk);
 //     }
 
-//     log_breath("TX-FRAME-DONE");
-//     std::cout << "[DMA] frame sent successfully" << std::endl;
+//     log_breath("TX-DUMMY-DONE");
+//     std::cout << "[DMA] send_dma_frame: sent dummy payload successfully" << std::endl;
 //     return true;
 // }
+
+bool send_dma_frame(const cv::Mat& currentFrame)
+{
+    if (currentFrame.empty() || currentFrame.type() != CV_8UC3)
+    {
+        std::cerr << "[DMA] send_dma_frame: invalid input frame (need CV_8UC3)" << std::endl;
+        return false;
+    }
+
+    cv::Mat frame;
+    if (currentFrame.cols != CAM_WIDTH || currentFrame.rows != CAM_HEIGHT)
+        cv::resize(currentFrame, frame, cv::Size(CAM_WIDTH, CAM_HEIGHT));
+    else
+        frame = currentFrame;
+
+    constexpr int blockRows = 5;
+    constexpr int bytesPerPixel = 3;
+    constexpr int headerBytes = 16;
+    constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
+    constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616
+
+    static_assert((payloadBytesPerBlock % 16) == 0, "5-row payload must be 16B aligned");
+    static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
+    static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 5");
+
+    uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
+
+     accel_virtual_addr[0] = 1;
+
+    int blockIndex = 0;
+    for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
+    {
+        std::memset(src, 0, headerBytes);
+        src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
+
+        uint8_t* payload = src + headerBytes;
+        size_t payloadOffset = 0;
+        for (int r = 0; r < blockRows; ++r)
+        {
+            const uint8_t* rowBytes = frame.ptr<uint8_t>(startRow + r);
+            std::memcpy(payload + payloadOffset, rowBytes, static_cast<size_t>(CAM_WIDTH * bytesPerPixel));
+            payloadOffset += static_cast<size_t>(CAM_WIDTH * bytesPerPixel);
+        }
+
+        auto startMm2sTransfer = [&]()
+        {
+            write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+            write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
+            return dma_mm2s_sync(dma_virtual_addr);
+        };
+
+        int rc = startMm2sTransfer();
+        if (rc != 0)
+        {
+            std::cerr << "[DMA] send_dma_frame: block " << blockIndex
+                      << " (rows " << startRow << "-" << (startRow + blockRows - 1)
+                      << ") failed rc=" << rc << " (retrying once)" << std::endl;
+
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+
+            rc = startMm2sTransfer();
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] send_dma_frame: block " << blockIndex
+                          << " (rows " << startRow << "-" << (startRow + blockRows - 1)
+                          << ") retry failed rc=" << rc << std::endl;
+                log_breath("MM2S-RETRY-FAIL");
+                return false;
+            }
+        }
+        printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
+    }
+
+    log_breath("TX-FRAME-DONE");
+    std::cout << "[DMA] frame sent successfully" << std::endl;
+    return true;
+}
 
 int receive_dma_frame(cv::Mat& grayFrame)
 {
