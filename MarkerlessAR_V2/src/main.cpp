@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <chrono>
 #include <cctype>
+#include <cerrno>
 #include <condition_variable>
 #include <fstream>
 #include <iomanip>
@@ -31,6 +32,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstring>
+#include <semaphore.h>
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
@@ -459,24 +461,33 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
 
-    const int warmupSendsBeforeRx = max(0, getEnvInt("AR_DMA_WARMUP_TX_BEFORE_RX", 10));
-    if (warmupSendsBeforeRx > 0)
+    const int okSendsBeforeRxStart = max(0, getEnvInt("AR_DMA_RX_START_AFTER_OK", 10));
+    sem_t rxStartSem{};
+    if (sem_init(&rxStartSem, 0, okSendsBeforeRxStart == 0 ? 1u : 0u) != 0)
     {
-        std::cerr << "[DMA] warmup: sending " << warmupSendsBeforeRx
-                  << " DMA messages before starting RX thread" << std::endl;
-
-        for (int i = 0; i < warmupSendsBeforeRx; ++i)
-        {
-            if (!send_dma_frame(currentFrame))
-            {
-                std::cerr << "[DMA] warmup: send " << i << " failed, not starting RX thread" << std::endl;
-                return;
-            }
-        }
+        std::perror("[DMA] sem_init(rxStartSem) failed");
+        return;
     }
+    std::atomic<bool> rxStartPosted{false};
 
     std::thread rxThread([&]()
     {
+        if (okSendsBeforeRxStart > 0)
+        {
+            std::cerr << "[RX] waiting to start until " << okSendsBeforeRxStart
+                      << " successful TX sends" << std::endl;
+        }
+
+        while (sem_wait(&rxStartSem) == -1 && errno == EINTR)
+        {
+        }
+
+        if (!dmaRunning.load())
+        {
+            std::cerr << "[RX] start canceled (DMA stopping)" << std::endl;
+            return;
+        }
+
         std::cerr << "[RX] DMA receive thread started" << std::endl;
         const int timeoutLimit = getEnvInt("AR_DMA_RX_TIMEOUT_LIMIT", 0);
         int consecutiveTimeouts = 0;
@@ -520,6 +531,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
     std::thread txThread([&]()
     {
+        int okSendCount = 0;
         while (dmaRunning.load())
         {
             cv::Mat frameToSend;
@@ -536,7 +548,23 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             if (!send_dma_frame(frameToSend))
             {
                 dmaRunning.store(false);
+                if (!rxStartPosted.exchange(true))
+                    sem_post(&rxStartSem);
                 break;
+            }
+
+            if (okSendsBeforeRxStart > 0)
+            {
+                ++okSendCount;
+                if (okSendCount >= okSendsBeforeRxStart)
+                {
+                    if (!rxStartPosted.exchange(true))
+                    {
+                        std::cerr << "[TX] reached " << okSendCount
+                                  << " OK sends, starting RX thread" << std::endl;
+                        sem_post(&rxStartSem);
+                    }
+                }
             }
         }
     });
@@ -603,8 +631,10 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
     dmaRunning.store(false);
     txCv.notify_all();
+    sem_post(&rxStartSem);
     txThread.join();
     rxThread.join();
+    sem_destroy(&rxStartSem);
 }
 
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image)
