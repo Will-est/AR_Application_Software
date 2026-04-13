@@ -38,6 +38,17 @@
 #define CAM_WIDTH  640
 #define CAM_HEIGHT 480
 
+#define ACCEL_CTRL_ADDR_IN_BREATH        0x10
+#define ACCEL_CTRL_ADDR_OUT_BREATH       0x20
+#define ACCEL_CTRL_ADDR_BGR_FIFO_BREATH  0x30
+#define ACCEL_CTRL_ADDR_PAD_FIFO_BREATH  0x40
+#define ACCEL_CTRL_ADDR_GRAY_FIFO_BREATH 0x50
+
+
+
+
+
+
 namespace
 {
 int getTargetFps()
@@ -211,6 +222,18 @@ int getEnvInt(const char* name, int fallback)
 }
 }
 
+
+static void log_breath(const char* tag)
+{
+    fprintf(stderr,
+        "[BREATH %s] in=%3u  out=%3u  bgr_fifo=%3u  pad_fifo=%3u  gray_fifo=%3u\n",
+        tag,
+        read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_IN_BREATH)        & 0xFF,
+        read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_OUT_BREATH)       & 0xFF,
+        read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_BGR_FIFO_BREATH)  & 0xFF,
+        read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_PAD_FIFO_BREATH)  & 0xFF,
+        read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_GRAY_FIFO_BREATH) & 0xFF);
+}
 
 /**
  * Processes a recorded video or live view from web-camera and allows you to adjust homography refinement and
@@ -400,11 +423,9 @@ int main(int argc, const char * argv[])
 
 void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, cv::VideoCapture& capture)
 {
-    // Grab first frame to get the frame dimensions
     cv::Mat currentFrame;
     capture >> currentFrame;
 
-    // Check the capture succeeded:
     if (currentFrame.empty())
     {
         std::cout << "Cannot open video capture device" << std::endl;
@@ -416,20 +437,18 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         std::cerr << "[DMA] init failed" << std::endl;
         return;
     }
+    log_breath("POST-INIT");
 
     cv::Size frameSize(CAM_WIDTH, CAM_HEIGHT);
 
     ARPipeline pipeline(patternImage, calibration);
     ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
-    // Load optional overlay image once and keep it in rendering context.
     configureImageOverlay(drawingCtx);
 
     using Clock = std::chrono::steady_clock;
     const auto framePeriod = std::chrono::milliseconds(1000 / getTargetFps());
     auto nextFrameDeadline = Clock::now();
 
-    // Two-thread DMA: one thread sends frames (MM2S), one thread receives processed frames (S2MM).
-    // This keeps the receive side draining even while we're still sending a frame.
     std::atomic<bool> dmaRunning{true};
     std::mutex txMutex;
     std::condition_variable txCv;
@@ -443,7 +462,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     std::thread rxThread([&]()
     {
         std::cerr << "[RX] DMA receive thread started" << std::endl;
-        const int timeoutLimit = getEnvInt("AR_DMA_RX_TIMEOUT_LIMIT", 0); // 0 = no limit
+        const int timeoutLimit = getEnvInt("AR_DMA_RX_TIMEOUT_LIMIT", 0);
         int consecutiveTimeouts = 0;
         while (dmaRunning.load())
         {
@@ -534,7 +553,6 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
                 displayFrame = converted;
         }
 
-        // Kick the send thread with the latest frame (drops older unsent frames if we're behind).
         {
             std::lock_guard<std::mutex> lock(txMutex);
             pendingTxFrame = displayFrame;
@@ -542,7 +560,6 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         }
         txCv.notify_one();
 
-        // Use the most recent processed frame we received from the PL (if available).
         cv::Mat processedForDetection;
         {
             std::lock_guard<std::mutex> lock(rxMutex);
@@ -552,7 +569,6 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
         if (processedForDetection.empty())
         {
-            // Until the first PL frame arrives, fall back to using the display frame.
             std::cerr << "[TEST] no DMA frame received yet, skipping detection this frame\n";
             processedForDetection = displayFrame;
         }
@@ -701,88 +717,66 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     else
         frame = currentFrame;
 
-    // TX format (1 row at a time):
-    // - 16-byte header
-    // - 1 row of raw BGR bytes (CAM_WIDTH * 3)
-    //
-    // Note: With AXI DMA, TLAST is asserted at the end of each MM2S transfer.
-    // Sending 1 row per transfer aligns TLAST to end-of-row.
-    constexpr int bytesPerPixel = 3; // B,G,R
+    constexpr int blockRows = 5;
+    constexpr int bytesPerPixel = 3;
     constexpr int headerBytes = 16;
-    constexpr int payloadBytesPerRow = CAM_WIDTH * bytesPerPixel; // 1920
-    constexpr int transferBytesPerRow = headerBytes + payloadBytesPerRow; // 1936 (16B-aligned)
+    constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
+    constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616
 
-    static_assert((payloadBytesPerRow % 16) == 0, "row payload must be 16B aligned");
-    static_assert((transferBytesPerRow % 16) == 0, "transfer size must be 16B aligned");
+    static_assert((payloadBytesPerBlock % 16) == 0, "5-row payload must be 16B aligned");
+    static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
+    static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 5");
 
     uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
 
-    constexpr int logEveryNRows = 32;
-
-    auto resetAndRunMm2s = [&]()
+    int blockIndex = 0;
+    for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
-        using Clock = std::chrono::steady_clock;
-        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
-        const auto deadline = Clock::now() + std::chrono::milliseconds(50);
-        while ((read_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER) & RESET_DMA) != 0)
-        {
-            if (Clock::now() > deadline)
-                break;
-        }
-        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-    };
-
-    for (int row = 0; row < CAM_HEIGHT; ++row)
-    {
-        // 16-byte header
         std::memset(src, 0, headerBytes);
-        src[0] = static_cast<uint8_t>(row & 0xFF);
-        src[1] = static_cast<uint8_t>((row >> 8) & 0xFF);
+        src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
 
-        // Payload: 1 row of raw BGR bytes (1920 bytes)
         uint8_t* payload = src + headerBytes;
-        const uint8_t* rowBytes = frame.ptr<uint8_t>(row);
-        std::memcpy(payload, rowBytes, static_cast<size_t>(payloadBytesPerRow));
+        size_t payloadOffset = 0;
+        for (int r = 0; r < blockRows; ++r)
+        {
+            const uint8_t* rowBytes = frame.ptr<uint8_t>(startRow + r);
+            std::memcpy(payload + payloadOffset, rowBytes, static_cast<size_t>(CAM_WIDTH * bytesPerPixel));
+            payloadOffset += static_cast<size_t>(CAM_WIDTH * bytesPerPixel);
+        }
 
         auto startMm2sTransfer = [&]()
         {
-            const unsigned int mm2sStatus = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
-            if (mm2sStatus & STATUS_HALTED)
-            {
-                std::cerr << "[DMA] send_dma_frame: MM2S halted before row " << row << ", resetting" << std::endl;
-                resetAndRunMm2s();
-            }
-
-            // Clear any stale IRQ bits, then start the transfer.
             write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
             write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerRow);
+            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
             return dma_mm2s_sync(dma_virtual_addr);
         };
 
-        // Send header + payload as one MM2S DMA transaction (1936 bytes).
         int rc = startMm2sTransfer();
         if (rc != 0)
         {
-            std::cerr << "[DMA] send_dma_frame: row " << row
-                      << " failed rc=" << rc << " (retrying once)" << std::endl;
+            std::cerr << "[DMA] send_dma_frame: block " << blockIndex
+                      << " (rows " << startRow << "-" << (startRow + blockRows - 1)
+                      << ") failed rc=" << rc << " (retrying once)" << std::endl;
 
-            // One retry with an MM2S reset. This helps recover from occasional stuck states/timeouts.
-            resetAndRunMm2s();
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
 
             rc = startMm2sTransfer();
             if (rc != 0)
             {
-                std::cerr << "[DMA] send_dma_frame: row " << row
-                          << " retry failed rc=" << rc << std::endl;
+                std::cerr << "[DMA] send_dma_frame: block " << blockIndex
+                          << " (rows " << startRow << "-" << (startRow + blockRows - 1)
+                          << ") retry failed rc=" << rc << std::endl;
+                log_breath("MM2S-RETRY-FAIL");
                 return false;
             }
         }
-        if ((row % logEveryNRows) == 0 || row == (CAM_HEIGHT - 1))
-            printf("[DMA] send_dma_frame: row %d sent OK\n", row);
+        printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
     }
 
+    log_breath("TX-FRAME-DONE");
     std::cout << "[DMA] frame sent successfully" << std::endl;
     return true;
 }
@@ -791,12 +785,9 @@ int receive_dma_frame(cv::Mat& grayFrame)
 {
     grayFrame.create(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
 
-    // RX format (1 row out per DMA transaction):
-    // - 16-byte header (row id)
-    // - 1 row grayscale payload (CAM_WIDTH bytes, 1 byte per pixel)
     constexpr int headerBytes = 16;
     constexpr int payloadBytes = CAM_WIDTH;
-    constexpr int rowBytes = headerBytes + payloadBytes; // 656 for 640-wide
+    constexpr int rowBytes = headerBytes + payloadBytes; // 656
     static_assert((rowBytes % 16) == 0, "row transfer must be 16B aligned");
 
     std::uint8_t* rx = reinterpret_cast<std::uint8_t*>(virtual_dst_addr);
@@ -841,12 +832,14 @@ int receive_dma_frame(cv::Mat& grayFrame)
         {
             std::cerr << "[DMA] receive_dma_frame: row " << row
                       << " failed rc=" << rc << " (retrying once)" << std::endl;
+            log_breath("S2MM-ROW-FAIL");
             resetAndRunS2mm();
             rc = startS2mmTransfer();
             if (rc != 0)
             {
                 std::cerr << "[DMA] receive_dma_frame: row " << row
                           << " retry failed rc=" << rc << std::endl;
+                log_breath("S2MM-RETRY-FAIL");
                 return rc;
             }
         }
@@ -858,9 +851,9 @@ int receive_dma_frame(cv::Mat& grayFrame)
         }
 
         const uint16_t headerId16 = static_cast<uint16_t>(rx[0]) | (static_cast<uint16_t>(rx[1]) << 8);
-        const uint8_t headerId8 = rx[0];
+        const uint8_t  headerId8  = rx[0];
         const uint16_t expected16 = static_cast<uint16_t>(row);
-        const uint8_t expected8 = static_cast<uint8_t>(row & 0xFF);
+        const uint8_t  expected8  = static_cast<uint8_t>(row & 0xFF);
         if (!(headerId16 == expected16 || headerId8 == expected8))
         {
             ++headerMismatchCount;
@@ -873,9 +866,8 @@ int receive_dma_frame(cv::Mat& grayFrame)
     }
 
     if (headerMismatchCount > 0)
-    {
         std::cerr << "[DMA] frame received with row-header mismatches: " << headerMismatchCount << std::endl;
-    }
+
     std::cout << "[DMA] frame received successfully" << std::endl;
     return 0;
 }
