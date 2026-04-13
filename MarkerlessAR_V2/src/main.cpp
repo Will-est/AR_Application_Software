@@ -701,75 +701,86 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     else
         frame = currentFrame;
 
-    // New TX format:
-    // - 5 rows at a time (5 * 640 pixels)
-    // - 1x 16-byte header burst per 5-row block
-    // - then raw BGR bytes for those 5 rows in 16-byte bursts
+    // TX format (1 row at a time):
+    // - 16-byte header
+    // - 1 row of raw BGR bytes (CAM_WIDTH * 3)
     //
     // Note: With AXI DMA, TLAST is asserted at the end of each MM2S transfer.
-    // This makes TLAST align to "end of 5-row block" (not end of each row).
-    constexpr int blockRows = 5;
+    // Sending 1 row per transfer aligns TLAST to end-of-row.
     constexpr int bytesPerPixel = 3; // B,G,R
     constexpr int headerBytes = 16;
-    constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
-    constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616 (16B-aligned)
+    constexpr int payloadBytesPerRow = CAM_WIDTH * bytesPerPixel; // 1920
+    constexpr int transferBytesPerRow = headerBytes + payloadBytesPerRow; // 1936 (16B-aligned)
 
-    static_assert((payloadBytesPerBlock % 16) == 0, "5-row payload must be 16B aligned");
-    static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
-    static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 5 for this TX format");
+    static_assert((payloadBytesPerRow % 16) == 0, "row payload must be 16B aligned");
+    static_assert((transferBytesPerRow % 16) == 0, "transfer size must be 16B aligned");
 
     uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
 
-    int blockIndex = 0;
-    for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
-    {
-        // 16-byte header (PL can ignore fields it doesn't need)
-        std::memset(src, 0, headerBytes);
-        // Header ID increments: 0,1,2,... per 5-row block.
-        src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
+    constexpr int logEveryNRows = 32;
 
-        // Payload: 5 rows of raw BGR bytes (9600 bytes)
-        uint8_t* payload = src + headerBytes;
-        size_t payloadOffset = 0;
-        for (int r = 0; r < blockRows; ++r)
+    auto resetAndRunMm2s = [&]()
+    {
+        using Clock = std::chrono::steady_clock;
+        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+        const auto deadline = Clock::now() + std::chrono::milliseconds(50);
+        while ((read_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER) & RESET_DMA) != 0)
         {
-            const uint8_t* rowBytes = frame.ptr<uint8_t>(startRow + r);
-            std::memcpy(payload + payloadOffset, rowBytes, static_cast<size_t>(CAM_WIDTH * bytesPerPixel));
-            payloadOffset += static_cast<size_t>(CAM_WIDTH * bytesPerPixel);
+            if (Clock::now() > deadline)
+                break;
         }
+        write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+    };
+
+    for (int row = 0; row < CAM_HEIGHT; ++row)
+    {
+        // 16-byte header
+        std::memset(src, 0, headerBytes);
+        src[0] = static_cast<uint8_t>(row & 0xFF);
+        src[1] = static_cast<uint8_t>((row >> 8) & 0xFF);
+
+        // Payload: 1 row of raw BGR bytes (1920 bytes)
+        uint8_t* payload = src + headerBytes;
+        const uint8_t* rowBytes = frame.ptr<uint8_t>(row);
+        std::memcpy(payload, rowBytes, static_cast<size_t>(payloadBytesPerRow));
 
         auto startMm2sTransfer = [&]()
         {
+            const unsigned int mm2sStatus = read_dma(dma_virtual_addr, MM2S_STATUS_REGISTER);
+            if (mm2sStatus & STATUS_HALTED)
+            {
+                std::cerr << "[DMA] send_dma_frame: MM2S halted before row " << row << ", resetting" << std::endl;
+                resetAndRunMm2s();
+            }
+
             // Clear any stale IRQ bits, then start the transfer.
             write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
             write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
-            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
+            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerRow);
             return dma_mm2s_sync(dma_virtual_addr);
         };
 
-        // Send header + payload as one MM2S DMA transaction (9616 bytes).
+        // Send header + payload as one MM2S DMA transaction (1936 bytes).
         int rc = startMm2sTransfer();
         if (rc != 0)
         {
-            std::cerr << "[DMA] send_dma_frame: block " << blockIndex
-                      << " (rows " << startRow << "-" << (startRow + blockRows - 1)
-                      << ") failed rc=" << rc << " (retrying once)" << std::endl;
+            std::cerr << "[DMA] send_dma_frame: row " << row
+                      << " failed rc=" << rc << " (retrying once)" << std::endl;
 
             // One retry with an MM2S reset. This helps recover from occasional stuck states/timeouts.
-            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
-            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            resetAndRunMm2s();
 
             rc = startMm2sTransfer();
             if (rc != 0)
             {
-                std::cerr << "[DMA] send_dma_frame: block " << blockIndex
-                          << " (rows " << startRow << "-" << (startRow + blockRows - 1)
-                          << ") retry failed rc=" << rc << std::endl;
+                std::cerr << "[DMA] send_dma_frame: row " << row
+                          << " retry failed rc=" << rc << std::endl;
                 return false;
             }
         }
-        printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
+        if ((row % logEveryNRows) == 0 || row == (CAM_HEIGHT - 1))
+            printf("[DMA] send_dma_frame: row %d sent OK\n", row);
     }
 
     std::cout << "[DMA] frame sent successfully" << std::endl;
