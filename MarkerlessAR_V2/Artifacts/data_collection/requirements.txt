@@ -1,0 +1,6 @@
+# Dependencies for Python
+
+pandas
+matplotlib
+seaborn
+argparse
