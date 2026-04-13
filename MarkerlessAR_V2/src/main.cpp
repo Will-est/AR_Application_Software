@@ -711,6 +711,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         return false;
     }
 
+    static std::atomic<unsigned long long> totalAttempts{0};
     static std::atomic<unsigned long long> totalSendsOk{0};
     static std::atomic<unsigned long long> consecutiveSendsOk{0};
 
@@ -734,6 +735,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     constexpr int blockCount = 1;
     for (int blockIndex = 0; blockIndex < blockCount; ++blockIndex)
     {
+        const unsigned long long attemptIndex = totalAttempts.fetch_add(1) + 1;
         for (int i = 0; i < payloadBytesPerBlock; ++i)
             src[i] = static_cast<std::uint8_t>((blockIndex + i) & 0xFF);
 
@@ -749,8 +751,15 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         int rc = startMm2sTransfer();
         if (rc != 0)
         {
+            const auto streak = consecutiveSendsOk.load();
+            const auto total = totalSendsOk.load();
             std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
-                      << " failed rc=" << rc << " (retrying once)" << std::endl;
+                      << " first-attempt failed rc=" << rc
+                      << " (attempt=" << attemptIndex
+                      << ", ok-streak=" << streak
+                      << ", ok-total=" << total
+                      << ", resetting streak + retrying once)" << std::endl;
+            consecutiveSendsOk.store(0);
 
             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
@@ -762,17 +771,22 @@ bool send_dma_frame(const cv::Mat& currentFrame)
                 const auto total = totalSendsOk.load();
                 std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
                           << " retry failed rc=" << rc
+                          << " (attempt=" << attemptIndex
                           << " (ok-streak=" << streak
                           << ", ok-total=" << total << ")" << std::endl;
                 log_breath("MM2S-DUMMY-RETRY-FAIL");
-                consecutiveSendsOk.store(0);
                 return false;
             }
         }
 
-        printf("[DMA] send_dma_frame: dummy block %d sent OK (%d bytes)\n", blockIndex, transferBytesPerBlock);
-        totalSendsOk.fetch_add(1);
-        consecutiveSendsOk.fetch_add(1);
+        const unsigned long long totalOk = totalSendsOk.fetch_add(1) + 1;
+        const unsigned long long streakOk = consecutiveSendsOk.fetch_add(1) + 1;
+        printf("[DMA] send_dma_frame: dummy block %d sent OK (%d bytes) (attempt=%llu ok-streak=%llu ok-total=%llu)\n",
+               blockIndex,
+               transferBytesPerBlock,
+               attemptIndex,
+               streakOk,
+               totalOk);
     }
 
     log_breath("TX-DUMMY-DONE");

@@ -297,7 +297,7 @@ int dma_init(void)
     if (virtual_dst_addr == MAP_FAILED) { perror("[DMA] mmap virtual_dst_addr failed"); return -1; }
     printf("[DMA] virtual_dst_addr mapped OK\n");
 
-    accel_virtual_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, (off_t)AXI_LITE_ADDR);
+    accel_virtual_addr = (unsigned int*) mmap(NULL, MMAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, ddr_memory, (off_t)ACCELERATOR_AXI_LITE_ADR);
     if (accel_virtual_addr == MAP_FAILED) { perror("[DMA] mmap accel_virtual_addr failed"); return -1; }
     printf("[DMA] accel_virtual_addr mapped OK\n");
 
