@@ -459,6 +459,22 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
 
+    const int warmupSendsBeforeRx = max(0, getEnvInt("AR_DMA_WARMUP_TX_BEFORE_RX", 10));
+    if (warmupSendsBeforeRx > 0)
+    {
+        std::cerr << "[DMA] warmup: sending " << warmupSendsBeforeRx
+                  << " DMA messages before starting RX thread" << std::endl;
+
+        for (int i = 0; i < warmupSendsBeforeRx; ++i)
+        {
+            if (!send_dma_frame(currentFrame))
+            {
+                std::cerr << "[DMA] warmup: send " << i << " failed, not starting RX thread" << std::endl;
+                return;
+            }
+        }
+    }
+
     std::thread rxThread([&]()
     {
         std::cerr << "[RX] DMA receive thread started" << std::endl;
