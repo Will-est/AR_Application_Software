@@ -765,7 +765,8 @@ bool receive_dma_frame(cv::Mat& grayFrame)
         std::uint8_t* dstRow = grayFrame.ptr<std::uint8_t>(row);
 
         // Arm S2MM for one full row (header+payload) and wait once.
-        // write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+        // Clear any stale IRQ bits before arming a new receive.
+        write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
         write_dma(dma_virtual_addr, S2MM_DST_ADDRESS_REGISTER, DESTINATION_ADDR);
         write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
         write_dma(dma_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, rowBytes);

@@ -142,6 +142,8 @@ int dma_s2mm_sync(unsigned int *virtual_addr)
         if (timeoutMs > 0 && now_mono_ms() > deadline)
         {
             printf("[DMA] s2mm_sync: TIMED OUT, last status = 0x%08x\n", s2mm_status);
+            dma_s2mm_status(virtual_addr);
+            dma_mm2s_status(virtual_addr);
             return ETIMEDOUT;
         }
         s2mm_status = read_dma(virtual_addr, S2MM_STATUS_REGISTER);
