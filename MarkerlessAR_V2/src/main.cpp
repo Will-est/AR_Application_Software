@@ -711,6 +711,9 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         return false;
     }
 
+    static std::atomic<unsigned long long> totalSendsOk{0};
+    static std::atomic<unsigned long long> consecutiveSendsOk{0};
+
     if (!dma_virtual_addr || !virtual_src_addr)
     {
         std::cerr << "[DMA] send_dma_frame: DMA not initialized" << std::endl;
@@ -755,14 +758,21 @@ bool send_dma_frame(const cv::Mat& currentFrame)
             rc = startMm2sTransfer();
             if (rc != 0)
             {
+                const auto streak = consecutiveSendsOk.load();
+                const auto total = totalSendsOk.load();
                 std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
-                          << " retry failed rc=" << rc << std::endl;
+                          << " retry failed rc=" << rc
+                          << " (ok-streak=" << streak
+                          << ", ok-total=" << total << ")" << std::endl;
                 log_breath("MM2S-DUMMY-RETRY-FAIL");
+                consecutiveSendsOk.store(0);
                 return false;
             }
         }
 
         printf("[DMA] send_dma_frame: dummy block %d sent OK (%d bytes)\n", blockIndex, transferBytesPerBlock);
+        totalSendsOk.fetch_add(1);
+        consecutiveSendsOk.fetch_add(1);
     }
 
     log_breath("TX-DUMMY-DONE");
