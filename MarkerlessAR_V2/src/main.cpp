@@ -705,11 +705,11 @@ static void configureImageOverlay(ARDrawingContext& drawingCtx)
 
 bool send_dma_frame(const cv::Mat& currentFrame)
 {
-    (void)currentFrame;
-
-    constexpr size_t kMessageBytes = 16;
-    constexpr size_t kTotalBytes = 128;
-    static_assert((kTotalBytes % kMessageBytes) == 0, "dummy send must be 16B aligned");
+    if (currentFrame.empty())
+    {
+        std::cerr << "[DMA] send_dma_frame: invalid input frame (empty)" << std::endl;
+        return false;
+    }
 
     if (!dma_virtual_addr || !virtual_src_addr)
     {
@@ -717,31 +717,56 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         return false;
     }
 
+    constexpr int payloadBytesPerBlock = 128;
+    constexpr int transferBytesPerBlock = payloadBytesPerBlock;
+
+    static_assert((payloadBytesPerBlock % 16) == 0, "payload must be 16B aligned");
+    static_assert((transferBytesPerBlock % 16) == 0, "transfer size must be 16B aligned");
+
+    std::uint8_t* src = reinterpret_cast<std::uint8_t*>(virtual_src_addr);
+
     if (accel_virtual_addr)
         accel_virtual_addr[0] = 1;
 
-    unsigned char msg[kMessageBytes];
-    for (size_t i = 0; i < (kTotalBytes / kMessageBytes); ++i)
+    constexpr int blockCount = 1;
+    for (int blockIndex = 0; blockIndex < blockCount; ++blockIndex)
     {
-        for (size_t j = 0; j < kMessageBytes; ++j)
-            msg[j] = static_cast<unsigned char>((i * kMessageBytes + j) & 0xFF);
+        for (int i = 0; i < payloadBytesPerBlock; ++i)
+            src[i] = static_cast<std::uint8_t>((blockIndex + i) & 0xFF);
 
-        msg[0] = 0xA5;
-        msg[1] = 0x5A;
-        msg[2] = static_cast<unsigned char>(i & 0xFF);
-        msg[3] = static_cast<unsigned char>((~i) & 0xFF);
+        auto startMm2sTransfer = [&]()
+        {
+            write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+            write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
+            return dma_mm2s_sync(dma_virtual_addr);
+        };
 
-        const unsigned int rc = send_message(msg, kMessageBytes);
+        int rc = startMm2sTransfer();
         if (rc != 0)
         {
-            std::cerr << "[DMA] send_dma_frame: dummy message " << i
-                      << " failed rc=" << rc << std::endl;
-            return false;
+            std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
+                      << " failed rc=" << rc << " (retrying once)" << std::endl;
+
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+
+            rc = startMm2sTransfer();
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] send_dma_frame: dummy block " << blockIndex
+                          << " retry failed rc=" << rc << std::endl;
+                log_breath("MM2S-DUMMY-RETRY-FAIL");
+                return false;
+            }
         }
+
+        printf("[DMA] send_dma_frame: dummy block %d sent OK (%d bytes)\n", blockIndex, transferBytesPerBlock);
     }
 
-    std::cout << "[DMA] send_dma_frame: sent " << kTotalBytes
-              << " dummy bytes (" << (kTotalBytes / kMessageBytes) << "x16B)" << std::endl;
+    log_breath("TX-DUMMY-DONE");
+    std::cout << "[DMA] send_dma_frame: sent dummy payload successfully" << std::endl;
     return true;
 }
 
