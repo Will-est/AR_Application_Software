@@ -201,6 +201,14 @@ bool getEnvFlag(const char* name)
     const char* value = std::getenv(name);
     return value && *value && std::strcmp(value, "0") != 0;
 }
+
+int getEnvInt(const char* name, int fallback)
+{
+    const char* value = std::getenv(name);
+    if (!value || !*value)
+        return fallback;
+    return std::atoi(value);
+}
 }
 
 
@@ -228,7 +236,7 @@ static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
 // DMA helpers (16B messages)
 bool send_dma_frame(const cv::Mat& currentFrame);
-bool receive_dma_frame(cv::Mat& grayFrame);
+int receive_dma_frame(cv::Mat& grayFrame);
 
 #if 0
 int main(int argc, const char* argv[])
@@ -434,11 +442,34 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
     std::thread rxThread([&]()
     {
+        std::cerr << "[RX] DMA receive thread started" << std::endl;
+        const int timeoutLimit = getEnvInt("AR_DMA_RX_TIMEOUT_LIMIT", 0); // 0 = no limit
+        int consecutiveTimeouts = 0;
         while (dmaRunning.load())
         {
             cv::Mat processed;
-            if (!receive_dma_frame(processed))
+            const int rc = receive_dma_frame(processed);
+            if (rc != 0)
             {
+                if (rc == ETIMEDOUT)
+                {
+                    ++consecutiveTimeouts;
+                    if (consecutiveTimeouts == 1 || (consecutiveTimeouts % 10) == 0)
+                    {
+                        std::cerr << "[RX] receive timed out (" << consecutiveTimeouts
+                                  << " consecutive)" << std::endl;
+                    }
+                    if (timeoutLimit > 0 && consecutiveTimeouts >= timeoutLimit)
+                    {
+                        std::cerr << "[RX] timeout limit reached, stopping DMA" << std::endl;
+                        dmaRunning.store(false);
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+
+                std::cerr << "[RX] receive failed rc=" << rc << ", stopping DMA" << std::endl;
                 dmaRunning.store(false);
                 break;
             }
@@ -446,7 +477,10 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             std::lock_guard<std::mutex> lock(rxMutex);
             latestProcessedFrame = processed;
             hasProcessedFrame = true;
+            consecutiveTimeouts = 0;
         }
+
+        std::cerr << "[RX] DMA receive thread exiting" << std::endl;
     });
 
     std::thread txThread([&]()
@@ -742,7 +776,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     return true;
 }
 
-bool receive_dma_frame(cv::Mat& grayFrame)
+int receive_dma_frame(cv::Mat& grayFrame)
 {
     grayFrame.create(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
 
@@ -766,6 +800,14 @@ bool receive_dma_frame(cv::Mat& grayFrame)
 
         // Arm S2MM for one full row (header+payload) and wait once.
         // Clear any stale IRQ bits before arming a new receive.
+        const unsigned int s2mmStatus = read_dma(dma_virtual_addr, S2MM_STATUS_REGISTER);
+        if (s2mmStatus & STATUS_HALTED)
+        {
+            std::cerr << "[DMA] receive_dma_frame: S2MM halted, resetting" << std::endl;
+            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RESET_DMA);
+            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+        }
+
         write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
         write_dma(dma_virtual_addr, S2MM_DST_ADDRESS_REGISTER, DESTINATION_ADDR);
         write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
@@ -775,7 +817,7 @@ bool receive_dma_frame(cv::Mat& grayFrame)
         if (rc != 0)
         {
             std::cerr << "[DMA] receive_dma_frame: row " << row << " failed rc=" << rc << std::endl;
-            return false;
+            return rc;
         }
 
         // Header id can be encoded as either 8-bit (byte0) or 16-bit LE (byte0..1).
@@ -802,5 +844,5 @@ bool receive_dma_frame(cv::Mat& grayFrame)
         std::cerr << "[DMA] frame received with row-header mismatches: " << headerMismatchCount << std::endl;
     }
     std::cout << "[DMA] frame received successfully" << std::endl;
-    return true;
+    return 0;
 }
