@@ -224,7 +224,7 @@ int getEnvInt(const char* name, int fallback)
 }
 }
 
-
+#define ACCEL_BASECTRL_ADDR              0x00 
 static void log_breath(const char* tag)
 {
     fprintf(stderr,
@@ -237,6 +237,7 @@ static void log_breath(const char* tag)
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_GRAY_FIFO_BREATH) & 0xFF,
         ((read_dma(accel_virtual_addr, ACCEL_BASECTRL_ADDR) & 0x02) >> 1));
 }
+
 
 /**
  * Processes a recorded video or live view from web-camera and allows you to adjust homography refinement and
