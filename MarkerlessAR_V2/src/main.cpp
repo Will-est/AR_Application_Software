@@ -862,13 +862,12 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         {
             std::lock_guard<std::mutex> lock(rxMutex);
             if (hasProcessedFrame)
-                processedForDetection = latestProcessedFrame;
+                processedForDetection = latestProcessedFrame.clone();
         }
 
         if (processedForDetection.empty())
         {
             std::cerr << "[TEST] no DMA frame received yet, skipping detection this frame\n";
-            processedForDetection = displayFrame;
         }
 
         shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx);
@@ -942,10 +941,18 @@ bool processFrame(const cv::Mat& displayFrame, const cv::Mat& processedFrame, AR
     cv::putText(img, "RANSAC threshold: " + ToString(pipeline.m_patternDetector.homographyReprojectionThreshold) + "( Use'-'/'+' to adjust)", cv::Point(10, 30), cv::FONT_HERSHEY_PLAIN, 1, CV_RGB(0,200,0));
 
     // Find a pattern and update it's detection status:
-    drawingCtx.isPatternPresent = pipeline.processFrame(processedFrame);
+    if (processedFrame.empty())
+    {
+        drawingCtx.isPatternPresent = false;
+    }
+    else
+    {
+        drawingCtx.isPatternPresent = pipeline.processFrame(processedFrame);
+    }
 
     // Update a pattern pose:
-    drawingCtx.patternPose = pipeline.getPatternLocation();
+    if (drawingCtx.isPatternPresent)
+        drawingCtx.patternPose = pipeline.getPatternLocation();
 
     // Update 2D pattern corners for pattern-locked image overlay.
     // This uses existing detector output and does not alter detection behavior.
