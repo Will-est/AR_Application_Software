@@ -440,7 +440,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         return;
     }
     log_breath("POST-INIT");
-    
+    accel_virtual_addr[0] |= (0x80);  
 
     cv::Size frameSize(CAM_WIDTH, CAM_HEIGHT);
 
