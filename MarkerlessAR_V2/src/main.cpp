@@ -862,7 +862,8 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     constexpr int blockRows = 5;
     constexpr int bytesPerPixel = 3;
     constexpr int headerBytes = DMA_TRANSFER_SIZE;
-    constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
+    ////constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
+    constexpr int payloadBytesPerBlock = 32;
     constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616
 
     static_assert((payloadBytesPerBlock % DMA_TRANSFER_SIZE) == 0, "5-row payload must be 16B aligned");
@@ -875,7 +876,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     int blockIndex = 0;
     for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
-        accel_virtual_addr[0] = 1;
+        accel_virtual_addr[0] |= 1;
 
         std::memset(src, 0, headerBytes);
         src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
@@ -920,7 +921,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         }
         printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
         log_breath("MM2S-BLOCK-OK");
-        accel_virtual_addr[0] = 0;
+        accel_virtual_addr[0] &= ~(0x1);
 
     }
 
