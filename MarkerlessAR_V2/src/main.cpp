@@ -878,7 +878,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     int blockIndex = 0;
     for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
-        if(startRow > 6){
+        if(startRow > 5){
             cv::Mat dummyFrame;
             receive_dma_frame(frame);
             log_breath("AFTER-RECEIVE");
@@ -1018,6 +1018,10 @@ int receive_dma_frame(cv::Mat& grayFrame)
             std::cerr << "[DMA] warning: row header id=" << headerId16
                       << " (byte0=" << static_cast<int>(headerId8) << ") expected "
                       << expected16 << " at row " << row << std::endl;
+            printf("[DMA] receive_dma_frame: row %d raw header (%d bytes): ", row, headerBytes);
+            print_mem(rx, headerBytes);
+            printf("[DMA] receive_dma_frame: row %d payload prefix (32 bytes): ", row);
+            print_mem(rx + headerBytes, 32);
         }
 
         std::memcpy(dstRow, rx + headerBytes, payloadBytes);
