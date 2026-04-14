@@ -861,7 +861,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     else
         frame = currentFrame;
 
-    constexpr int blockRows = 5;
+    constexpr int blockRows = 1;
     constexpr int bytesPerPixel = 3;
     constexpr int headerBytes = DMA_TRANSFER_SIZE;
     constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
