@@ -463,75 +463,235 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     std::mutex rxMutex;
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
-    while(1){
-        send_dma_frame(currentFrame);
-        log_breath("AFTER-SEND");
-       // sleep(1);
-    }
 
-    const int okSendsBeforeRxStart = max(0, getEnvInt("AR_DMA_RX_START_AFTER_OK", 10));
-    sem_t rxStartSem{};
-    if (sem_init(&rxStartSem, 0, okSendsBeforeRxStart == 0 ? 1u : 0u) != 0)
+    // Ping-pong DMA:
+    // - TX sends `warmupRows` first, then RX is allowed to start.
+    // - After warmup: RX receives 1 row, then TX sends 1 row (pipeline depth = warmupRows).
+    // - TX exits the per-frame loop once it has sent all rows; RX continues until the full frame is received.
+    const int warmupRows = max(0, min(CAM_HEIGHT, getEnvInt("AR_DMA_PINGPONG_WARMUP_ROWS", 6)));
+
+    auto sem_wait_intr = [](sem_t* sem)
     {
-        std::perror("[DMA] sem_init(rxStartSem) failed");
+        while (sem_wait(sem) == -1 && errno == EINTR)
+        {
+        }
+    };
+
+    auto sem_drain = [](sem_t* sem)
+    {
+        while (sem_trywait(sem) == 0)
+        {
+        }
+    };
+
+    sem_t frameBeginSem{};
+    sem_t warmupDoneSem{};
+    sem_t rxTurnSem{};
+    sem_t txTurnSem{};
+    sem_t frameDoneSem{};
+
+    if (sem_init(&frameBeginSem, 0, 0u) != 0 ||
+        sem_init(&warmupDoneSem, 0, 0u) != 0 ||
+        sem_init(&rxTurnSem, 0, 0u) != 0 ||
+        sem_init(&txTurnSem, 0, 0u) != 0 ||
+        sem_init(&frameDoneSem, 0, 0u) != 0)
+    {
+        std::perror("[DMA] sem_init(pingpong) failed");
         return;
     }
-    std::atomic<bool> rxStartPosted{false};
+
+    const auto send_row_bgr = [&](const cv::Mat& frame, int rowIndex) -> bool
+    {
+        if (!dma_virtual_addr || !virtual_src_addr)
+            return false;
+        if (rowIndex < 0 || rowIndex >= frame.rows)
+            return false;
+
+        constexpr int headerBytes = DMA_TRANSFER_SIZE;
+        constexpr int payloadBytes = CAM_WIDTH * 3;
+        constexpr int transferBytes = headerBytes + payloadBytes; // 1936
+        static_assert((payloadBytes % DMA_TRANSFER_SIZE) == 0, "payload must be 16B aligned");
+        static_assert((transferBytes % DMA_TRANSFER_SIZE) == 0, "transfer size must be 16B aligned");
+
+        std::uint8_t* src = reinterpret_cast<std::uint8_t*>(virtual_src_addr);
+        std::memset(src, 0, headerBytes);
+        src[0] = static_cast<std::uint8_t>(rowIndex & 0xFF);
+        src[1] = static_cast<std::uint8_t>((rowIndex >> 8) & 0xFF);
+
+        std::uint8_t* payload = src + headerBytes;
+        const std::uint8_t* rowBytes = frame.ptr<std::uint8_t>(rowIndex);
+        std::memcpy(payload, rowBytes, static_cast<size_t>(payloadBytes));
+
+        auto startMm2sTransfer = [&]()
+        {
+            write_dma(dma_virtual_addr, MM2S_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+            write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytes);
+            return dma_mm2s_sync(dma_virtual_addr);
+        };
+
+        int rc = startMm2sTransfer();
+        if (rc != 0)
+        {
+            std::cerr << "[DMA] tx: row " << rowIndex << " failed rc=" << rc << " (retrying once)" << std::endl;
+
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RESET_DMA);
+            write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+
+            rc = startMm2sTransfer();
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] tx: row " << rowIndex << " retry failed rc=" << rc << std::endl;
+                log_breath("MM2S-ROW-RETRY-FAIL");
+                return false;
+            }
+        }
+
+        printf("[DMA] tx: row %d sent OK\n", rowIndex);
+        log_breath("MM2S-ROW-OK");
+        return true;
+    };
+
+    const auto receive_row_gray = [&](cv::Mat& grayFrame, int rowIndex) -> int
+    {
+        if (!dma_virtual_addr || !virtual_dst_addr)
+            return ENODEV;
+
+        constexpr int headerBytes = DMA_TRANSFER_SIZE;
+        constexpr int payloadBytes = CAM_WIDTH;
+        constexpr int rowBytes = headerBytes + payloadBytes; // 656
+        static_assert((rowBytes % DMA_TRANSFER_SIZE) == 0, "row transfer must be 16B aligned");
+
+        std::uint8_t* rx = reinterpret_cast<std::uint8_t*>(virtual_dst_addr);
+
+        auto resetAndRunS2mm = [&]()
+        {
+            using Clock = std::chrono::steady_clock;
+            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RESET_DMA);
+            const auto deadline = Clock::now() + std::chrono::milliseconds(50);
+            while ((read_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER) & RESET_DMA) != 0)
+            {
+                if (Clock::now() > deadline)
+                    break;
+            }
+            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+        };
+
+        auto startS2mmTransfer = [&]()
+        {
+            write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+            write_dma(dma_virtual_addr, S2MM_DST_ADDRESS_REGISTER, DESTINATION_ADDR);
+            write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
+            write_dma(dma_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, rowBytes);
+            return dma_s2mm_sync(dma_virtual_addr);
+        };
+
+        const unsigned int s2mmStatus = read_dma(dma_virtual_addr, S2MM_STATUS_REGISTER);
+        if (s2mmStatus & STATUS_HALTED)
+        {
+            std::cerr << "[DMA] rx: S2MM halted before row " << rowIndex << ", resetting" << std::endl;
+            resetAndRunS2mm();
+        }
+
+        int rc = startS2mmTransfer();
+        if (rc != 0)
+        {
+            std::cerr << "[DMA] rx: row " << rowIndex << " failed rc=" << rc << " (retrying once)" << std::endl;
+            log_breath("S2MM-ROW-FAIL");
+            resetAndRunS2mm();
+            rc = startS2mmTransfer();
+            if (rc != 0)
+            {
+                std::cerr << "[DMA] rx: row " << rowIndex << " retry failed rc=" << rc << std::endl;
+                log_breath("S2MM-RETRY-FAIL");
+                return rc;
+            }
+            std::cerr << "[DMA] rx: row " << rowIndex << " retry OK" << std::endl;
+            log_breath("S2MM-RETRY-OK");
+        }
+
+        const uint16_t headerId16 = static_cast<uint16_t>(rx[0]) | (static_cast<uint16_t>(rx[1]) << 8);
+        const uint8_t headerId8 = rx[0];
+        const uint16_t expected16 = static_cast<uint16_t>(rowIndex);
+        const uint8_t expected8 = static_cast<uint8_t>(rowIndex & 0xFF);
+        if (!(headerId16 == expected16 || headerId8 == expected8))
+        {
+            std::cerr << "[DMA] warning: row header id=" << headerId16
+                      << " (byte0=" << static_cast<int>(headerId8) << ") expected "
+                      << expected16 << " at row " << rowIndex << std::endl;
+            printf("[DMA] rx: row %d raw header (%d bytes): ", rowIndex, headerBytes);
+            print_mem(rx, headerBytes);
+            printf("[DMA] rx: row %d payload prefix (32 bytes): ", rowIndex);
+            print_mem(rx + headerBytes, 32);
+        }
+
+        std::memcpy(grayFrame.ptr<std::uint8_t>(rowIndex), rx + headerBytes, payloadBytes);
+
+        printf("[DMA] rx: row %d received OK\n", rowIndex);
+        log_breath("S2MM-ROW-OK");
+        return 0;
+    };
 
     std::thread rxThread([&]()
     {
-        if (okSendsBeforeRxStart > 0)
-        {
-            std::cerr << "[RX] waiting to start until " << okSendsBeforeRxStart
-                      << " successful TX sends" << std::endl;
-        }
-
-        while (sem_wait(&rxStartSem) == -1 && errno == EINTR)
-        {
-        }
-
-        if (!dmaRunning.load())
-        {
-            std::cerr << "[RX] start canceled (DMA stopping)" << std::endl;
-            return;
-        }
-
-        std::cerr << "[RX] DMA receive thread started" << std::endl;
         const int timeoutLimit = getEnvInt("AR_DMA_RX_TIMEOUT_LIMIT", 0);
         int consecutiveTimeouts = 0;
         while (dmaRunning.load())
         {
-            cv::Mat processed;
-            const int rc = receive_dma_frame(processed);
-            if (rc != 0)
+            sem_wait_intr(&frameBeginSem);
+            if (!dmaRunning.load())
+                break;
+
+            sem_wait_intr(&warmupDoneSem);
+            if (!dmaRunning.load())
+                break;
+
+            cv::Mat processed(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
+            for (int row = 0; row < CAM_HEIGHT && dmaRunning.load(); ++row)
             {
-                if (rc == ETIMEDOUT)
+                if (row < (CAM_HEIGHT - warmupRows))
+                    sem_wait_intr(&rxTurnSem);
+
+                const int rc = receive_row_gray(processed, row);
+                if (rc != 0)
                 {
-                    ++consecutiveTimeouts;
-                    if (consecutiveTimeouts == 1 || (consecutiveTimeouts % 10) == 0)
+                    if (rc == ETIMEDOUT)
                     {
-                        std::cerr << "[RX] receive timed out (" << consecutiveTimeouts
-                                  << " consecutive)" << std::endl;
+                        ++consecutiveTimeouts;
+                        if (consecutiveTimeouts == 1 || (consecutiveTimeouts % 10) == 0)
+                        {
+                            std::cerr << "[RX] receive timed out (" << consecutiveTimeouts
+                                      << " consecutive)" << std::endl;
+                        }
+                        if (timeoutLimit > 0 && consecutiveTimeouts >= timeoutLimit)
+                        {
+                            std::cerr << "[RX] timeout limit reached, stopping DMA" << std::endl;
+                            dmaRunning.store(false);
+                        }
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
                     }
-                    if (timeoutLimit > 0 && consecutiveTimeouts >= timeoutLimit)
+                    else
                     {
-                        std::cerr << "[RX] timeout limit reached, stopping DMA" << std::endl;
+                        std::cerr << "[RX] receive failed rc=" << rc << ", stopping DMA" << std::endl;
                         dmaRunning.store(false);
-                        break;
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                    continue;
+                    break;
                 }
 
-                std::cerr << "[RX] receive failed rc=" << rc << ", stopping DMA" << std::endl;
-                dmaRunning.store(false);
-                break;
+                consecutiveTimeouts = 0;
+                if (row < (CAM_HEIGHT - warmupRows))
+                    sem_post(&txTurnSem);
             }
 
-            std::lock_guard<std::mutex> lock(rxMutex);
-            latestProcessedFrame = processed;
-            hasProcessedFrame = true;
-            consecutiveTimeouts = 0;
+            if (dmaRunning.load())
+            {
+                std::lock_guard<std::mutex> lock(rxMutex);
+                latestProcessedFrame = processed;
+                hasProcessedFrame = true;
+            }
+
+            sem_post(&frameDoneSem);
         }
 
         std::cerr << "[RX] DMA receive thread exiting" << std::endl;
@@ -539,7 +699,6 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
     std::thread txThread([&]()
     {
-        int okSendCount = 0;
         while (dmaRunning.load())
         {
             cv::Mat frameToSend;
@@ -553,27 +712,81 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
                 hasPendingTx = false;
             }
 
-            if (!send_dma_frame(frameToSend))
+            if (frameToSend.empty())
+                continue;
+
+            if (frameToSend.type() != CV_8UC3)
             {
-                dmaRunning.store(false);
-                if (!rxStartPosted.exchange(true))
-                    sem_post(&rxStartSem);
+                std::cerr << "[DMA] txThread: invalid frame (need CV_8UC3)" << std::endl;
+                continue;
+            }
+
+            cv::Mat frame;
+            if (frameToSend.cols != CAM_WIDTH || frameToSend.rows != CAM_HEIGHT)
+                cv::resize(frameToSend, frame, cv::Size(CAM_WIDTH, CAM_HEIGHT));
+            else
+                frame = frameToSend;
+
+            sem_drain(&warmupDoneSem);
+            sem_drain(&rxTurnSem);
+            sem_drain(&txTurnSem);
+            sem_drain(&frameDoneSem);
+
+            sem_post(&frameBeginSem);
+
+            bool ok = true;
+            for (int row = 0; row < warmupRows; ++row)
+            {
+                if (!dmaRunning.load())
+                {
+                    ok = false;
+                    break;
+                }
+                if (!send_row_bgr(frame, row))
+                {
+                    ok = false;
+                    dmaRunning.store(false);
+                    break;
+                }
+            }
+
+            sem_post(&warmupDoneSem);
+            if (!ok)
+            {
+                sem_post(&rxTurnSem);
+                sem_post(&txTurnSem);
+                sem_post(&frameDoneSem);
                 break;
             }
 
-            if (okSendsBeforeRxStart > 0)
+            // RX runs first after warmup.
+            sem_post(&rxTurnSem);
+
+            for (int row = warmupRows; row < CAM_HEIGHT && dmaRunning.load(); ++row)
             {
-                ++okSendCount;
-                if (okSendCount >= okSendsBeforeRxStart)
+                sem_wait_intr(&txTurnSem);
+                if (!dmaRunning.load())
                 {
-                    if (!rxStartPosted.exchange(true))
-                    {
-                        std::cerr << "[TX] reached " << okSendCount
-                                  << " OK sends, starting RX thread" << std::endl;
-                        sem_post(&rxStartSem);
-                    }
+                    ok = false;
+                    break;
                 }
+
+                if (!send_row_bgr(frame, row))
+                {
+                    ok = false;
+                    dmaRunning.store(false);
+                    break;
+                }
+
+                sem_post(&rxTurnSem);
             }
+
+            // Let RX drain remaining rows (last `warmupRows` rows) without blocking.
+            sem_post(&rxTurnSem);
+
+            sem_wait_intr(&frameDoneSem);
+            if (!ok)
+                break;
         }
     });
 
@@ -639,10 +852,18 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
     dmaRunning.store(false);
     txCv.notify_all();
+    sem_post(&frameBeginSem);
+    sem_post(&warmupDoneSem);
+    sem_post(&rxTurnSem);
+    sem_post(&txTurnSem);
+    sem_post(&frameDoneSem);
     txThread.join();
-    sem_post(&rxStartSem);
     rxThread.join();
-    sem_destroy(&rxStartSem);
+    sem_destroy(&frameBeginSem);
+    sem_destroy(&warmupDoneSem);
+    sem_destroy(&rxTurnSem);
+    sem_destroy(&txTurnSem);
+    sem_destroy(&frameDoneSem);
 }
 
 void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibration, const cv::Mat& image)
@@ -1018,10 +1239,6 @@ int receive_dma_frame(cv::Mat& grayFrame)
             std::cerr << "[DMA] warning: row header id=" << headerId16
                       << " (byte0=" << static_cast<int>(headerId8) << ") expected "
                       << expected16 << " at row " << row << std::endl;
-            printf("[DMA] receive_dma_frame: row %d raw header (%d bytes): ", row, headerBytes);
-            print_mem(rx, headerBytes);
-            printf("[DMA] receive_dma_frame: row %d payload prefix (32 bytes): ", row);
-            print_mem(rx + headerBytes, 32);
         }
 
         std::memcpy(dstRow, rx + headerBytes, payloadBytes);
