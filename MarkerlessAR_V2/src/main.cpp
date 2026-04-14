@@ -876,7 +876,6 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     int blockIndex = 0;
     for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
-        accel_virtual_addr[0] |= 1;
 
         std::memset(src, 0, headerBytes);
         src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
@@ -896,6 +895,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
             write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
             write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
+            accel_virtual_addr[0] |= 1;
             return dma_mm2s_sync(dma_virtual_addr);
         };
 
