@@ -500,6 +500,10 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         return;
     }
 
+    std::atomic<unsigned long long> pingpongFrameSeq{0};
+    std::atomic<unsigned long long> activeFrameId{0};
+    std::atomic<int> lastPingpongRxRc{0};
+
     const auto send_row_bgr = [&](const cv::Mat& frame, int rowIndex) -> bool
     {
         if (!dma_virtual_addr || !virtual_src_addr)
@@ -647,7 +651,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             if (!dmaRunning.load())
                 break;
 
+            const unsigned long long frameId = activeFrameId.load();
             cv::Mat processed(CAM_HEIGHT, CAM_WIDTH, CV_8UC1);
+            int frameRc = 0;
             for (int row = 0; row < CAM_HEIGHT && dmaRunning.load(); ++row)
             {
                 if (row < (CAM_HEIGHT - warmupRows))
@@ -656,6 +662,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
                 const int rc = receive_row_gray(processed, row);
                 if (rc != 0)
                 {
+                    frameRc = rc;
                     if (rc == ETIMEDOUT)
                     {
                         ++consecutiveTimeouts;
@@ -684,11 +691,22 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
                     sem_post(&txTurnSem);
             }
 
-            if (dmaRunning.load())
+            lastPingpongRxRc.store(frameRc);
+
+            if (frameRc == 0 && dmaRunning.load())
             {
                 std::lock_guard<std::mutex> lock(rxMutex);
                 latestProcessedFrame = processed;
                 hasProcessedFrame = true;
+            }
+
+            if (frameRc == 0)
+            {
+                std::cerr << "[PINGPONG] frame " << frameId << " RX complete (" << CAM_HEIGHT << " rows)" << std::endl;
+            }
+            else
+            {
+                std::cerr << "[PINGPONG] frame " << frameId << " RX failed rc=" << frameRc << std::endl;
             }
 
             sem_post(&frameDoneSem);
@@ -732,6 +750,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             sem_drain(&txTurnSem);
             sem_drain(&frameDoneSem);
 
+            const unsigned long long frameId = pingpongFrameSeq.fetch_add(1) + 1;
+            activeFrameId.store(frameId);
+            lastPingpongRxRc.store(0);
             sem_post(&frameBeginSem);
 
             bool ok = true;
@@ -785,6 +806,18 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             sem_post(&rxTurnSem);
 
             sem_wait_intr(&frameDoneSem);
+            const int rxRc = lastPingpongRxRc.load();
+            if (ok && rxRc == 0)
+            {
+                std::cerr << "[PINGPONG] frame " << frameId << " TX+RX complete" << std::endl;
+                log_breath("PINGPONG-FRAME-OK");
+            }
+            else
+            {
+                std::cerr << "[PINGPONG] frame " << frameId << " complete with errors (txOk="
+                          << (ok ? 1 : 0) << ", rxRc=" << rxRc << ")" << std::endl;
+                log_breath("PINGPONG-FRAME-ERR");
+            }
             if (!ok)
                 break;
         }
