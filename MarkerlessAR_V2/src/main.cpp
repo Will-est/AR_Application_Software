@@ -847,7 +847,7 @@ static void configureImageOverlay(ARDrawingContext& drawingCtx)
 //     std::cout << "[DMA] send_dma_frame: sent dummy payload successfully" << std::endl;
 //     return true;
 // }
-
+int receive_dma_frame(cv::Mat& grayFrame);
 bool send_dma_frame(const cv::Mat& currentFrame)
 {
     if (currentFrame.empty() || currentFrame.type() != CV_8UC3)
@@ -878,8 +878,8 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     int blockIndex = 0;
     for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
-        if(startRow > 5){
-            cv::Mat dummyFrame(blockRows, CAM_WIDTH, CV_8UC3, cv::Scalar(0, 0, 255));
+        if(startRow > 6){
+            cv::Mat dummyFrame;
             receive_dma_frame(frame);
             log_breath("AFTER-RECEIVE");
         }
