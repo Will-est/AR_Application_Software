@@ -921,6 +921,9 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         log_breath("MM2S-BLOCK-OK");
     }
 
+    accel_virtual_addr[0] = 0;
+
+
     log_breath("TX-FRAME-DONE");
     std::cout << "[DMA] frame sent successfully" << std::endl;
     return true;
