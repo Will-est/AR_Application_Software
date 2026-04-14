@@ -341,6 +341,10 @@ int dma_init(void)
 
     dma_s2mm_status(dma_virtual_addr);
     dma_mm2s_status(dma_virtual_addr);
+    // Arm S2MM once and leave it running so accelerator output drains freely.
+    write_dma(dma_virtual_addr, S2MM_STATUS_REGISTER, STATUS_IOC_IRQ | STATUS_DELAY_IRQ | STATUS_ERR_IRQ);
+    write_dma(dma_virtual_addr, S2MM_BUFF_LENGTH_REGISTER, MMAP_SIZE);
+
 
     printf("[DMA] init complete\n");
     return 0;

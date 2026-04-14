@@ -442,7 +442,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         return;
     }
     log_breath("POST-INIT");
-    accel_virtual_addr[0] |= (0x80);  
+    accel_virtual_addr[0] |= (0x81);
 
     cv::Size frameSize(CAM_WIDTH, CAM_HEIGHT);
 
@@ -464,7 +464,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
     while(1){
-        //send_dma_frame(currentFrame);
+        send_dma_frame(currentFrame);
         log_breath("AFTER-SEND");
        // sleep(1);
     }
@@ -897,7 +897,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
             write_dma(dma_virtual_addr, MM2S_SRC_ADDRESS_REGISTER, SOURCE_ADDR);
             write_dma(dma_virtual_addr, MM2S_CONTROL_REGISTER, RUN_DMA | ENABLE_ALL_IRQ);
             write_dma(dma_virtual_addr, MM2S_TRNSFR_LENGTH_REGISTER, transferBytesPerBlock);
-            accel_virtual_addr[0] |= 1;
+            //accel_virtual_addr[0] |= 1;
             return dma_mm2s_sync(dma_virtual_addr);
         };
 
@@ -923,7 +923,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         }
         printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
         log_breath("MM2S-BLOCK-OK");
-        accel_virtual_addr[0] &= ~(0x1);
+        //accel_virtual_addr[0] &= ~(0x1);
 
     }
 
