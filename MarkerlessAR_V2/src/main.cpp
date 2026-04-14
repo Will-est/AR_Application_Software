@@ -862,8 +862,7 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     constexpr int blockRows = 5;
     constexpr int bytesPerPixel = 3;
     constexpr int headerBytes = DMA_TRANSFER_SIZE;
-    ////constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
-    constexpr int payloadBytesPerBlock = 32;
+    constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
     constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616
 
     static_assert((payloadBytesPerBlock % DMA_TRANSFER_SIZE) == 0, "5-row payload must be 16B aligned");
