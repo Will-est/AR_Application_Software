@@ -463,15 +463,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     std::mutex rxMutex;
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
-    int crack = 0;
     while(1){
         send_dma_frame(currentFrame);
         log_breath("AFTER-SEND");
-        if(crack>5){
-            receive_dma_frame(latestProcessedFrame);
-        }
-        crack++;
-
        // sleep(1);
     }
 
@@ -884,6 +878,11 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     int blockIndex = 0;
     for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
+        if(startRow > 5){
+            cv::Mat dummyFrame(blockRows, CAM_WIDTH, CV_8UC3, cv::Scalar(0, 0, 255));
+            receive_dma_frame(frame);
+            log_breath("AFTER-RECEIVE");
+        }
 
         std::memset(src, 0, headerBytes);
         src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
