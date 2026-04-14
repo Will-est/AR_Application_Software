@@ -228,13 +228,14 @@ int getEnvInt(const char* name, int fallback)
 static void log_breath(const char* tag)
 {
     fprintf(stderr,
-        "[BREATH %s] in=%3u  out=%3u  bgr_fifo=%3u  pad_fifo=%3u  gray_fifo=%3u\n",
+        "[BREATH %s] in=%3u  out=%3u  bgr_fifo=%3u  pad_fifo=%3u  gray_fifo=%3u\n Accelerator Done: %3u",
         tag,
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_IN_BREATH)        & 0xFF,
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_OUT_BREATH)       & 0xFF,
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_BGR_FIFO_BREATH)  & 0xFF,
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_PAD_FIFO_BREATH)  & 0xFF,
-        read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_GRAY_FIFO_BREATH) & 0xFF);
+        read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_GRAY_FIFO_BREATH) & 0xFF,
+        ((read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR) & 0x02) >> 1));
 }
 
 /**
