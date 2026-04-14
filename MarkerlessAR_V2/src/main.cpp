@@ -871,11 +871,12 @@ bool send_dma_frame(const cv::Mat& currentFrame)
 
     uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
 
-     accel_virtual_addr[0] = 1;
 
     int blockIndex = 0;
     for (int startRow = 0; startRow < CAM_HEIGHT; startRow += blockRows, ++blockIndex)
     {
+        accel_virtual_addr[0] = 1;
+
         std::memset(src, 0, headerBytes);
         src[0] = static_cast<uint8_t>(blockIndex & 0xFF);
 
@@ -919,9 +920,10 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         }
         printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
         log_breath("MM2S-BLOCK-OK");
+        accel_virtual_addr[0] = 0;
+
     }
 
-    accel_virtual_addr[0] = 0;
 
 
     log_breath("TX-FRAME-DONE");
