@@ -1,0 +1,173 @@
+Attempting to open camera device 0 with V4L2...
+Camera opened, initializing...
+Camera initialized at 1280x800 @ 30 fps
+Test frame captured successfully (1280x800)
+[DMA] dma_virtual_addr mapped OK
+[DMA] virtual_src_addr mapped OK
+[DMA] virtual_dst_addr mapped OK
+[DMA] accel_virtual_addr mapped OK
+[DMA] init: resetting DMA
+Stream to memory-mapped status (0x00000001@0x34): Halted.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] init: halting DMA
+Stream to memory-mapped status (0x00000001@0x34): Halted.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] init: enabling interrupts and running
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000000@0x04): Running.
+[DMA] init: setting addresses
+Memory-mapped to stream status (0x00000000@0x04): Running.
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000000@0x04): Running.
+[DMA] init complete
+GL_VERSION:   OpenGL ES 3.1 Mesa 20.0.8
+GL_RENDERER:  llvmpipe (LLVM 10.0.0, 128 bits)
+GL_VENDOR:    VMware, Inc.
+GLSL_VERSION: OpenGL ES GLSL ES 3.10
+Image overlay enabled: /home/unc-design/augmented-reality-glasses/AR_Application_Software/MarkerlessAR_V2/Artifacts/overlay.png
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 0 sent OK
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 1 sent OK
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 2 sent OK
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 3 sent OK
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 4 sent OK
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 5 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] receive_dma_frame: row0 header bytes: A4000000 00000000 00000000 00000000 
+[DMA] receive_dma_frame: row 0 raw header (16 bytes): A4000000 00000000 00000000 00000000 
+[DMA] receive_dma_frame: row 0 payload prefix (32 bytes): FDFDFDFD FCFCFCFC FCFCFDFC FCFCEDB1 4C0F000B 3A8DC5D7 D8D7D5D3 D1CFCCC9 
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] receive_dma_frame: row 1 raw header (16 bytes): A5000000 00000000 00000000 00000000 
+[DMA] receive_dma_frame: row 1 payload prefix (32 bytes): FAFAFAFA FAFAF9FA FAFAFAFA FAF9EBAF 4B0F000B 3B8FC8DA DBDBD9D7 D5D3D0CD 
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] receive_dma_frame: row 2 raw header (16 bytes): A6000000 00000000 00000000 00000000 
+[DMA] receive_dma_frame: row 2 payload prefix (32 bytes): F7F7F7F7 F7F6F6F7 F7F7F8F8 F7F7E8AD 4A0E000C 3E96D2E4 E5E5E4E2 E0DEDBD8 
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] receive_dma_frame: row 3 raw header (16 bytes): A7000000 00000000 00000000 00000000 
+[DMA] receive_dma_frame: row 3 payload prefix (32 bytes): F8F8F7F7 F7F7F7F7 F7F7F8F8 F8F7E9AD 4A0E000D 43A0E0F4 F5F5F5F4 F2F0EEEC 
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] receive_dma_frame: row 4 raw header (16 bytes): A8000000 00000000 00000000 00000000 
+[DMA] receive_dma_frame: row 4 payload prefix (32 bytes): FCFCFCFC FCFCFCFC FCFCFDFD FCFCEDB1 4C0F000D 45A6E9FD FFFFFFFE FDFBFAF8 
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] receive_dma_frame: row 5 raw header (16 bytes): A9000000 00000000 00000000 00000000 
+[DMA] receive_dma_frame: row 5 payload prefix (32 bytes): FFFFFFFF FFFFFFFF FFFFFFFF FFFFF1B3 4D0F000D 46A8EBFF FFFFFFFF FFFFFEFC 
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 6 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 7 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 8 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 9 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 10 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 11 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 12 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 13 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00000001@0x04): Halted.
+[DMA] mm2s_sync: MM2S=0x00000000 S2MM=0x00000000
+[DMA] send_dma_frame: block 14 sent OK
+[DMA] s2mm_sync: initial status = 0x00000000
+[DMA] s2mm_sync: TIMED OUT, last status = 0x00000000
+Stream to memory-mapped status (0x00000000@0x34): Running.
+Memory-mapped to stream status (0x00001002@0x04): Running.
+ Idle.
+ IOC interrupt occurred.
