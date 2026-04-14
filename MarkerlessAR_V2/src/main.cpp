@@ -468,7 +468,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         send_dma_frame(currentFrame);
         log_breath("AFTER-SEND");
         if(crack>5){
-            receive_dma_frame(&latestProcessedFrame);
+            receive_dma_frame(latestProcessedFrame);
         }
         crack++;
 
