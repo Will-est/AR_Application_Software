@@ -311,7 +311,7 @@ int dma_init(void)
     // virtual_src_addr[5] = 0x22223333;
     // virtual_src_addr[6] = 0x44445555;
     // virtual_src_addr[7] = 0x66667777;
-    // memset(virtual_dst_addr, 0, 32);
+    memset(virtual_dst_addr, 0, 32);
 
     printf("[DMA] init: resetting DMA\n");
     write_dma(dma_virtual_addr, S2MM_CONTROL_REGISTER, RESET_DMA);
