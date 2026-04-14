@@ -464,8 +464,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
     while(1){
-        send_dma_frame(currentFrame);
+        //send_dma_frame(currentFrame);
         log_breath("AFTER-SEND");
+       // sleep(1);
     }
 
     const int okSendsBeforeRxStart = max(0, getEnvInt("AR_DMA_RX_START_AFTER_OK", 10));
@@ -867,9 +868,9 @@ bool send_dma_frame(const cv::Mat& currentFrame)
     constexpr int payloadBytesPerBlock = blockRows * CAM_WIDTH * bytesPerPixel; // 9600
     constexpr int transferBytesPerBlock = headerBytes + payloadBytesPerBlock;   // 9616
 
-    static_assert((payloadBytesPerBlock % DMA_TRANSFER_SIZE) == 0, "5-row payload must be 16B aligned");
+    static_assert((payloadBytesPerBlock % DMA_TRANSFER_SIZE) == 0, "1-row payload must be 16B aligned");
     static_assert((transferBytesPerBlock % DMA_TRANSFER_SIZE) == 0, "transfer size must be 16B aligned");
-    static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 5");
+    static_assert((CAM_HEIGHT % blockRows) == 0, "CAM_HEIGHT must be divisible by 16");
 
     uint8_t* src = reinterpret_cast<uint8_t*>(virtual_src_addr);
 
