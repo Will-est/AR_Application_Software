@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 2.6)
 project(ARProject)
 
+# Optional perf/data collection (CSV) via preprocessor guard.
+option(COLLECTDA "Enable performance/data collection logging" OFF)
+option(DCOLLECTDA "Enable performance/data collection logging (alias)" OFF)
+if(DCOLLECTDA)
+    set(COLLECTDA ON)
+endif()
+
 # Set path to custom OpenCV build with OpenGL support
 set(OpenCV_DIR "/opt/opencv-3.4-opengl/share/OpenCV" CACHE PATH "Path to OpenCV build directory" FORCE)
 

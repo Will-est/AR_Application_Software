@@ -2,6 +2,8 @@ add_executable(ARProject ARDrawingContext.cpp
 ARDrawingContext.hpp
 CameraCalibration.cpp
 CameraCalibration.hpp
+CollectDa.cpp
+CollectDa.hpp
 GeometryTypes.cpp
 GeometryTypes.hpp
 main.cpp
@@ -27,6 +29,10 @@ set_target_properties(ARProject PROPERTIES OUTPUT_NAME "ARProject.out")
 # #if _DEBUG will be compiled on Linux/gcc as well.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
 	add_definitions(-D_DEBUG)
+endif()
+
+if(COLLECTDA)
+    target_compile_definitions(ARProject PRIVATE COLLECTDA=1)
 endif()
 
 target_link_libraries( ARProject ${OpenCV_LIBRARIES} )

@@ -13,6 +13,7 @@
 #include "ARDrawingContext.hpp"
 #include "ARPipeline.hpp"
 #include "DebugHelpers.hpp"
+#include "CollectDa.hpp"
 #include "dma_driver.hpp"
 
 // Standard includes:
@@ -441,8 +442,15 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
         std::cerr << "[DMA] init failed" << std::endl;
         return;
     }
-    log_breath("POST-INIT");
     accel_virtual_addr[0] |= (0x81);
+
+#if COLLECTDA
+    struct CollectDaGuard
+    {
+        ~CollectDaGuard() { collectda::shutdown(); }
+    } collectDaGuard;
+    collectda::init();
+#endif
 
     cv::Size frameSize(CAM_WIDTH, CAM_HEIGHT);
 
@@ -453,6 +461,12 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     using Clock = std::chrono::steady_clock;
     const auto framePeriod = std::chrono::milliseconds(1000 / getTargetFps());
     auto nextFrameDeadline = Clock::now();
+    const auto monoUsNow = []() -> std::uint64_t
+    {
+        const auto now = Clock::now().time_since_epoch();
+        return static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(now).count());
+    };
 
     std::atomic<bool> dmaRunning{true};
     std::mutex txMutex;
@@ -503,6 +517,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     std::atomic<unsigned long long> pingpongFrameSeq{0};
     std::atomic<unsigned long long> activeFrameId{0};
     std::atomic<int> lastPingpongRxRc{0};
+#if COLLECTDA
+    std::atomic<std::uint64_t> lastPingpongDmaStartUs{0};
+#endif
 
     const auto send_row_bgr = [&](const cv::Mat& frame, int rowIndex) -> bool
     {
@@ -552,8 +569,6 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             }
         }
 
-        printf("[DMA] tx: row %d sent OK\n", rowIndex);
-        log_breath("MM2S-ROW-OK");
         return true;
     };
 
@@ -632,8 +647,6 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
         std::memcpy(grayFrame.ptr<std::uint8_t>(rowIndex), rx + headerBytes, payloadBytes);
 
-        printf("[DMA] rx: row %d received OK\n", rowIndex);
-        log_breath("S2MM-ROW-OK");
         return 0;
     };
 
@@ -693,6 +706,16 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
             lastPingpongRxRc.store(frameRc);
 
+#if COLLECTDA
+            if (frameRc == 0)
+            {
+                const std::uint64_t startUs = lastPingpongDmaStartUs.load();
+                const std::uint64_t endUs = monoUsNow();
+                if (startUs != 0 && endUs >= startUs)
+                    collectda::onPreprocessUs(endUs - startUs);
+            }
+#endif
+
             if (frameRc == 0 && dmaRunning.load())
             {
                 std::lock_guard<std::mutex> lock(rxMutex);
@@ -700,11 +723,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
                 hasProcessedFrame = true;
             }
 
-            if (frameRc == 0)
-            {
-                std::cerr << "[PINGPONG] frame " << frameId << " RX complete (" << CAM_HEIGHT << " rows)" << std::endl;
-            }
-            else
+            if (frameRc != 0)
             {
                 std::cerr << "[PINGPONG] frame " << frameId << " RX failed rc=" << frameRc << std::endl;
             }
@@ -712,7 +731,6 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             sem_post(&frameDoneSem);
         }
 
-        std::cerr << "[RX] DMA receive thread exiting" << std::endl;
     });
 
     std::thread txThread([&]()
@@ -753,6 +771,9 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             const unsigned long long frameId = pingpongFrameSeq.fetch_add(1) + 1;
             activeFrameId.store(frameId);
             lastPingpongRxRc.store(0);
+#if COLLECTDA
+            lastPingpongDmaStartUs.store(monoUsNow());
+#endif
             sem_post(&frameBeginSem);
 
             bool ok = true;
@@ -807,12 +828,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
             sem_wait_intr(&frameDoneSem);
             const int rxRc = lastPingpongRxRc.load();
-            if (ok && rxRc == 0)
-            {
-                std::cerr << "[PINGPONG] frame " << frameId << " TX+RX complete" << std::endl;
-                log_breath("PINGPONG-FRAME-OK");
-            }
-            else
+            if (!(ok && rxRc == 0))
             {
                 std::cerr << "[PINGPONG] frame " << frameId << " complete with errors (txOk="
                           << (ok ? 1 : 0) << ", rxRc=" << rxRc << ")" << std::endl;
@@ -824,6 +840,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     });
 
     bool shouldQuit = false;
+    auto lastNoDmaLog = Clock::now() - std::chrono::seconds(10);
     do
     {
         capture >> currentFrame;
@@ -832,6 +849,10 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
             shouldQuit = true;
             continue;
         }
+
+#if COLLECTDA
+        collectda::onFrameArrival();
+#endif
 
         cv::Mat displayFrame;
         if (currentFrame.cols != CAM_WIDTH || currentFrame.rows != CAM_HEIGHT)
@@ -867,10 +888,24 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 
         if (processedForDetection.empty())
         {
-            std::cerr << "[TEST] no DMA frame received yet, skipping detection this frame\n";
+            const auto now = Clock::now();
+            if (now - lastNoDmaLog >= std::chrono::seconds(1))
+            {
+                std::cerr << "[DMA] no processed frame available yet (skipping detection)" << std::endl;
+                lastNoDmaLog = now;
+            }
         }
 
+#if COLLECTDA
+        const auto frameStart = Clock::now();
+#endif
         shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx);
+#if COLLECTDA
+        const auto frameEnd = Clock::now();
+        const auto frameUs = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count());
+        collectda::onFrameProcessedUs(frameUs);
+#endif
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -949,6 +984,9 @@ bool processFrame(const cv::Mat& displayFrame, const cv::Mat& processedFrame, AR
     {
         drawingCtx.isPatternPresent = pipeline.processFrame(processedFrame);
     }
+#if COLLECTDA
+    collectda::onPatternFound(drawingCtx.isPatternPresent);
+#endif
 
     // Update a pattern pose:
     if (drawingCtx.isPatternPresent)
@@ -1142,7 +1180,6 @@ bool send_dma_frame(const cv::Mat& currentFrame)
         if(startRow > 5){
             cv::Mat dummyFrame;
             receive_dma_frame(frame);
-            log_breath("AFTER-RECEIVE");
         }
 
         std::memset(src, 0, headerBytes);
@@ -1187,16 +1224,9 @@ bool send_dma_frame(const cv::Mat& currentFrame)
                 return false;
             }
         }
-        printf("[DMA] send_dma_frame: block %d sent OK\n", blockIndex);
-        log_breath("MM2S-BLOCK-OK");
         //accel_virtual_addr[0] &= ~(0x1);
-
     }
 
-
-
-    log_breath("TX-FRAME-DONE");
-    std::cout << "[DMA] frame sent successfully" << std::endl;
     return true;
 }
 
@@ -1263,12 +1293,6 @@ int receive_dma_frame(cv::Mat& grayFrame)
             }
         }
 
-        if (row == 0)
-        {
-            printf("[DMA] receive_dma_frame: row0 header bytes: ");
-            print_mem(rx, headerBytes);
-        }
-
         const uint16_t headerId16 = static_cast<uint16_t>(rx[0]) | (static_cast<uint16_t>(rx[1]) << 8);
         const uint8_t  headerId8  = rx[0];
         const uint16_t expected16 = static_cast<uint16_t>(row);
@@ -1287,6 +1311,5 @@ int receive_dma_frame(cv::Mat& grayFrame)
     if (headerMismatchCount > 0)
         std::cerr << "[DMA] frame received with row-header mismatches: " << headerMismatchCount << std::endl;
 
-    std::cout << "[DMA] frame received successfully" << std::endl;
     return 0;
 }
