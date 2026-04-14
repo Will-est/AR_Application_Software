@@ -463,9 +463,14 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     std::mutex rxMutex;
     cv::Mat latestProcessedFrame;
     bool hasProcessedFrame = false;
+    int crack = 0;
     while(1){
         send_dma_frame(currentFrame);
         log_breath("AFTER-SEND");
+        crack++;
+        if(crack>5){
+            receive_dma_frame(&latestProcessedFrame);
+        }
        // sleep(1);
     }
 
