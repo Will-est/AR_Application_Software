@@ -235,7 +235,7 @@ static void log_breath(const char* tag)
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_BGR_FIFO_BREATH)  & 0xFF,
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_PAD_FIFO_BREATH)  & 0xFF,
         read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR_GRAY_FIFO_BREATH) & 0xFF,
-        ((read_dma(accel_virtual_addr, ACCEL_CTRL_ADDR) & 0x02) >> 1));
+        ((read_dma(accel_virtual_addr, ACCEL_BASECTRL_ADDR) & 0x02) >> 1));
 }
 
 /**
