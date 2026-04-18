@@ -25,7 +25,7 @@ void ARDrawingContextDrawCallback(void* param);
 class ARDrawingContext
 {
 public:
-  ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c);
+  ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c, bool enableWindow = true);
   ~ARDrawingContext();
 
   
@@ -60,6 +60,7 @@ private:
     void draw();
 
 private:
+  bool               m_windowEnabled;
   bool               m_isTextureInitialized;
   unsigned int       m_backgroundTextureId;
   CameraCalibration  m_calibration;

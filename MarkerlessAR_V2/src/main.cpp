@@ -60,6 +60,42 @@
 
 namespace
 {
+bool envTruthy(const char* value)
+{
+    if (!value)
+        return false;
+    while (*value && std::isspace(static_cast<unsigned char>(*value)))
+        ++value;
+    if (!*value)
+        return false;
+
+    if (std::strcmp(value, "1") == 0)
+        return true;
+    if (std::strcmp(value, "0") == 0)
+        return false;
+
+    std::string lowered(value);
+    for (char& ch : lowered)
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+    return lowered == "true" || lowered == "yes" || lowered == "y" || lowered == "on";
+}
+
+bool shouldRunHeadless()
+{
+    // Force GUI/headless via env vars. Headless is also the safe default when no display is available.
+    const bool forceGui = envTruthy(std::getenv("AR_GUI"));
+    const bool forceHeadless = envTruthy(std::getenv("AR_HEADLESS"));
+    const char* display = std::getenv("DISPLAY");
+    const bool hasDisplay = display && *display;
+
+    if (forceGui)
+        return false;
+    if (forceHeadless)
+        return true;
+    return !hasDisplay;
+}
+
 int getTargetFps()
 {
     // Keep default smoothness while avoiding busy render loops.
@@ -539,7 +575,8 @@ bool processFrame(const cv::Mat& displayFrame,
                   const cv::Mat& processedFrame,
                   ARPipeline& pipeline,
                   ARDrawingContext& drawingCtx,
-                  HttpMjpegServer* mjpegServer);
+                  HttpMjpegServer* mjpegServer,
+                  bool headless);
 
 static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
@@ -736,7 +773,10 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     cv::Size frameSize(CAM_WIDTH, CAM_HEIGHT);
 
     ARPipeline pipeline(patternImage, calibration);
-    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
+    const bool headless = shouldRunHeadless();
+    if (headless)
+        std::cout << "[HEADLESS] DISPLAY not set (or AR_HEADLESS=1); GUI window disabled. Use AR_MJPEG_PORT to view over HTTP." << std::endl;
+    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration, !headless);
     configureImageOverlay(drawingCtx);
 
     std::unique_ptr<HttpMjpegServer> mjpegServer;
@@ -1187,7 +1227,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 #if COLLECTDA
         const auto frameStart = Clock::now();
 #endif
-        shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx, mjpegServer.get());
+        shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx, mjpegServer.get(), headless);
 #if COLLECTDA
         const auto frameEnd = Clock::now();
         const auto frameUs = static_cast<std::uint64_t>(
@@ -1225,7 +1265,10 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
 {
     cv::Size frameSize(image.cols, image.rows);
     ARPipeline pipeline(patternImage, calibration);
-    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
+    const bool headless = shouldRunHeadless();
+    if (headless)
+        std::cout << "[HEADLESS] DISPLAY not set (or AR_HEADLESS=1); GUI window disabled. Use AR_MJPEG_PORT to view over HTTP." << std::endl;
+    ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration, !headless);
     // Load optional overlay image once and keep it in rendering context.
     configureImageOverlay(drawingCtx);
 
@@ -1243,7 +1286,7 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     bool shouldQuit = false;
     do
     {
-        shouldQuit = processFrame(image, image, pipeline, drawingCtx, mjpegServer.get());
+        shouldQuit = processFrame(image, image, pipeline, drawingCtx, mjpegServer.get(), headless);
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -1260,7 +1303,8 @@ bool processFrame(const cv::Mat& displayFrame,
                   const cv::Mat& processedFrame,
                   ARPipeline& pipeline,
                   ARDrawingContext& drawingCtx,
-                  HttpMjpegServer* mjpegServer)
+                  HttpMjpegServer* mjpegServer,
+                  bool headless)
 {
     // Clone image used for background (we will draw overlay on it)
     cv::Mat img = displayFrame.clone();
@@ -1309,28 +1353,32 @@ bool processFrame(const cv::Mat& displayFrame,
         mjpegServer->pushFrameBgr(streamFrame);
     }
 
-    // Request redraw of the window:
-    drawingCtx.updateWindow();
+    int keyCode = -1;
+    if (!headless)
+    {
+        // Request redraw of the window:
+        drawingCtx.updateWindow();
 
-    // Read the keyboard input:
-    int keyCode = cv::waitKey(5);
+        // Read the keyboard input:
+        keyCode = cv::waitKey(5);
+    }
 
     bool shouldQuit = false;
-    if (keyCode == '+' || keyCode == '=')
+    if (!headless && (keyCode == '+' || keyCode == '='))
     {
         pipeline.m_patternDetector.homographyReprojectionThreshold += 0.2f;
         pipeline.m_patternDetector.homographyReprojectionThreshold = min(10.0f, pipeline.m_patternDetector.homographyReprojectionThreshold);
     }
-    else if (keyCode == '-')
+    else if (!headless && keyCode == '-')
     {
         pipeline.m_patternDetector.homographyReprojectionThreshold -= 0.2f;
         pipeline.m_patternDetector.homographyReprojectionThreshold = max(0.0f, pipeline.m_patternDetector.homographyReprojectionThreshold);
     }
-    else if (keyCode == 'h')
+    else if (!headless && keyCode == 'h')
     {
         pipeline.m_patternDetector.enableHomographyRefinement = !pipeline.m_patternDetector.enableHomographyRefinement;
     }
-    else if (keyCode == 27 || keyCode == 'q')
+    else if (!headless && (keyCode == 27 || keyCode == 'q'))
     {
         shouldQuit = true;
     }

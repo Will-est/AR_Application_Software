@@ -314,13 +314,20 @@ void ARDrawingContextDrawCallback(void* param)
 }
 
 // ---------- ARDrawingContext ----------
-ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, const CameraCalibration& c)
-    : m_isTextureInitialized(false)
+ARDrawingContext::ARDrawingContext(std::string windowName,
+                                   cv::Size frameSize,
+                                   const CameraCalibration& c,
+                                   bool enableWindow)
+    : m_windowEnabled(enableWindow)
+    , m_isTextureInitialized(false)
     , m_calibration(c)
     , m_overlayEnabled(false)
     , m_overlayPatternPresent(false)
     , m_windowName(windowName)
 {
+    if (!m_windowEnabled)
+        return;
+
     cv::namedWindow(windowName, cv::WINDOW_OPENGL);
     cv::resizeWindow(windowName, frameSize.width, frameSize.height);
 
@@ -343,7 +350,8 @@ ARDrawingContext::ARDrawingContext(std::string windowName, cv::Size frameSize, c
 
 ARDrawingContext::~ARDrawingContext()
 {
-    cv::setOpenGlDrawCallback(m_windowName, 0, 0);
+    if (m_windowEnabled)
+        cv::setOpenGlDrawCallback(m_windowName, 0, 0);
 }
 
 void ARDrawingContext::updateBackground(const cv::Mat& frame)
@@ -414,6 +422,8 @@ void ARDrawingContext::setPatternOverlayState(bool patternPresent, const std::ve
 
 void ARDrawingContext::updateWindow()
 {
+    if (!m_windowEnabled)
+        return;
     cv::updateWindow(m_windowName);
 }
 

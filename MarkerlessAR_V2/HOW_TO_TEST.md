@@ -29,7 +29,8 @@ cd AR_Application_Software/MarkerlessAR_V2
 ```
 
 Expected:
-- A window opens and renders the camera feed.
+- If a display is available, a window opens and renders the camera feed.
+- If `DISPLAY` is not set (headless SSH / no X server), the app runs headless (no GUI window).
 - If the pattern is visible, the overlay locks to the detected pattern (see `OVERLAY_PIPELINE.md`).
 
 Useful runtime env vars:
@@ -37,6 +38,10 @@ Useful runtime env vars:
 ```bash
 export AR_TARGET_FPS=30              # frame pacing (clamped 1..120)
 export AR_OVERLAY_IMAGE=/abs/path.png
+
+# Headless/GUI control
+export AR_HEADLESS=1                 # force headless mode (no cv::namedWindow / no cv::waitKey)
+export AR_GUI=1                      # force GUI (requires a working DISPLAY / X server)
 
 # Optional: stream the rendered 2D result over Wi-Fi as MJPEG-over-HTTP
 # (view from Windows by opening: http://<device-ip>:8080/)
@@ -47,7 +52,7 @@ export AR_MJPEG_FPS=15               # encode FPS cap (0 = encode every frame)
 
 ## MJPEG Streaming (Windows Viewer)
 
-This is optional and does not change behavior unless `AR_MJPEG_PORT` is set.
+This is optional and does not change behavior unless `AR_MJPEG_PORT` is set. The stream works in both GUI and headless modes (headless is automatic when `DISPLAY` is not set).
 
 ### Device/FPGA
 
