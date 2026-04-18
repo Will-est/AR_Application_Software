@@ -36,6 +36,10 @@ public:
   //! Set the new frame for the background
   void updateBackground(const cv::Mat& frame);
 
+  //! Compose the same 2D overlay (if enabled) onto a CPU BGR frame for streaming/recording.
+  //! `backgroundBgr` must be a 3-channel BGR image. `outBgr` will be a cloned/composited 3-channel BGR.
+  bool composeFrameForStreaming(const cv::Mat& backgroundBgr, cv::Mat& outBgr) const;
+
   //! Set/replace image overlay (supports 3-channel BGR or 4-channel BGRA).
   //! If no alpha channel is present, one will be synthesized.
   void setOverlayImage(const cv::Mat& overlayImage);

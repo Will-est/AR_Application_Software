@@ -351,6 +351,28 @@ void ARDrawingContext::updateBackground(const cv::Mat& frame)
     frame.copyTo(m_backgroundImage);
 }
 
+bool ARDrawingContext::composeFrameForStreaming(const cv::Mat& backgroundBgr, cv::Mat& outBgr) const
+{
+    outBgr.release();
+    if (backgroundBgr.empty())
+        return false;
+    if (backgroundBgr.type() != CV_8UC3)
+        return false;
+
+    backgroundBgr.copyTo(outBgr);
+
+    if (!m_overlayEnabled || m_overlayImage.empty())
+        return true;
+
+    bool composited = false;
+    if (m_overlayPatternPresent && m_overlayPatternQuad.size() == 4)
+        composited = CompositeOverlayOnPattern(m_overlayImage, m_overlayPatternQuad, outBgr);
+    if (!composited)
+        CompositeOverlayOnCorner(m_overlayImage, outBgr);
+
+    return true;
+}
+
 void ARDrawingContext::setOverlayImage(const cv::Mat& overlayImage)
 {
     if (overlayImage.empty())

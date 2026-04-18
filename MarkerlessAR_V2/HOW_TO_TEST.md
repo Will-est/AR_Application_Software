@@ -37,7 +37,46 @@ Useful runtime env vars:
 ```bash
 export AR_TARGET_FPS=30              # frame pacing (clamped 1..120)
 export AR_OVERLAY_IMAGE=/abs/path.png
+
+# Optional: stream the rendered 2D result over Wi-Fi as MJPEG-over-HTTP
+# (view from Windows by opening: http://<device-ip>:8080/)
+export AR_MJPEG_PORT=8080            # 0/unset disables
+export AR_MJPEG_QUALITY=80           # JPEG quality (1..100)
+export AR_MJPEG_FPS=15               # encode FPS cap (0 = encode every frame)
 ```
+
+## MJPEG Streaming (Windows Viewer)
+
+This is optional and does not change behavior unless `AR_MJPEG_PORT` is set.
+
+### Device/FPGA
+
+Run the app with streaming enabled:
+
+```bash
+cd AR_Application_Software/MarkerlessAR_V2
+export AR_MJPEG_PORT=8080
+export AR_MJPEG_QUALITY=80
+export AR_MJPEG_FPS=15
+./build/src/ARProject.out Artifacts/pattern.png
+```
+
+Find the device IP address (use the Wi-Fi interface IP):
+
+```bash
+ip a
+```
+
+### Windows Laptop
+
+Open a browser on the same network:
+
+- `http://<device-ip>:8080/` (simple page that embeds the stream)
+- `http://<device-ip>:8080/stream.mjpg` (raw MJPEG stream)
+
+Troubleshooting:
+- Verify connectivity: `ping <device-ip>`
+- If it hangs, the port may be blocked (firewall) or already in use; try a different `AR_MJPEG_PORT`.
 
 ## Run (Recorded Video)
 
@@ -91,4 +130,3 @@ Watch the log:
 ```bash
 tail -f /tmp/ar_collectda.csv
 ```
-

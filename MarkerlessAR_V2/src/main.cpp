@@ -28,12 +28,18 @@
 #include <iostream>
 #include <atomic>
 #include <mutex>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
 #include <cstdint>
 #include <cstring>
 #include <semaphore.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #define NOMINMAX
 #define min(a,b)            (((a) < (b)) ? (a) : (b))
 #define max(a,b)            (((a) > (b)) ? (a) : (b))
@@ -216,18 +222,289 @@ bool getEnvFlag(const char* name)
     return value && *value && std::strcmp(value, "0") != 0;
 }
 
-int getEnvInt(const char* name, int fallback)
-{
-    const char* value = std::getenv(name);
-    if (!value || !*value)
-        return fallback;
-    return std::atoi(value);
-}
-}
+	int getEnvInt(const char* name, int fallback)
+	{
+	    const char* value = std::getenv(name);
+	    if (!value || !*value)
+	        return fallback;
+	    return std::atoi(value);
+	}
 
-#define ACCEL_BASECTRL_ADDR              0x00 
-static void log_breath(const char* tag)
-{
+	class HttpMjpegServer
+	{
+	public:
+	    HttpMjpegServer(int port, int jpegQuality, int encodeFps)
+	        : m_port(port)
+	        , m_jpegQuality(max(1, min(100, jpegQuality)))
+	        , m_encodeFps(max(0, min(120, encodeFps)))
+	        , m_running(true)
+	        , m_listenFd(-1)
+	    {
+	        if (m_encodeFps > 0)
+	            m_encodePeriod = std::chrono::microseconds(static_cast<int>(1000000 / max(1, m_encodeFps)));
+	        m_acceptThread = std::thread([this]() { this->acceptLoop(); });
+	    }
+
+	    ~HttpMjpegServer()
+	    {
+	        stop();
+	    }
+
+	    void stop()
+	    {
+	        bool expected = true;
+	        if (!m_running.compare_exchange_strong(expected, false))
+	            return;
+
+	        m_frameCv.notify_all();
+
+	        if (m_listenFd >= 0)
+	        {
+	            ::shutdown(m_listenFd, SHUT_RDWR);
+	            ::close(m_listenFd);
+	            m_listenFd = -1;
+	        }
+
+	        if (m_acceptThread.joinable())
+	            m_acceptThread.join();
+	    }
+
+	    void pushFrameBgr(const cv::Mat& frameBgr)
+	    {
+	        if (!m_running.load())
+	            return;
+	        if (frameBgr.empty())
+	            return;
+
+	        const auto now = std::chrono::steady_clock::now();
+	        if (m_encodeFps > 0)
+	        {
+	            if (now < m_nextEncodeDeadline)
+	                return;
+	            m_nextEncodeDeadline = now + m_encodePeriod;
+	        }
+
+	        cv::Mat bgr;
+	        if (frameBgr.type() == CV_8UC3)
+	        {
+	            bgr = frameBgr;
+	        }
+	        else
+	        {
+	            if (frameBgr.channels() == 1)
+	                cv::cvtColor(frameBgr, bgr, cv::COLOR_GRAY2BGR);
+	            else if (frameBgr.channels() == 4)
+	                cv::cvtColor(frameBgr, bgr, cv::COLOR_BGRA2BGR);
+	            else
+	                frameBgr.convertTo(bgr, CV_8U);
+	        }
+
+	        std::vector<uchar> encoded;
+	        std::vector<int> params;
+	        params.push_back(cv::IMWRITE_JPEG_QUALITY);
+	        params.push_back(m_jpegQuality);
+	        if (!cv::imencode(".jpg", bgr, encoded, params))
+	            return;
+
+	        {
+	            std::lock_guard<std::mutex> lock(m_mutex);
+	            m_latestJpeg.swap(encoded);
+	            ++m_frameSeq;
+	        }
+	        m_frameCv.notify_all();
+	    }
+
+	private:
+	    static bool sendAll(int fd, const void* data, size_t size)
+	    {
+	        const char* p = static_cast<const char*>(data);
+	        size_t remaining = size;
+	        while (remaining > 0)
+	        {
+	            ssize_t rc = ::send(fd, p, remaining, MSG_NOSIGNAL);
+	            if (rc <= 0)
+	                return false;
+	            p += static_cast<size_t>(rc);
+	            remaining -= static_cast<size_t>(rc);
+	        }
+	        return true;
+	    }
+
+	    static bool sendAll(int fd, const std::string& s)
+	    {
+	        return sendAll(fd, s.data(), s.size());
+	    }
+
+	    void acceptLoop()
+	    {
+	        m_listenFd = ::socket(AF_INET, SOCK_STREAM, 0);
+	        if (m_listenFd < 0)
+	        {
+	            std::perror("[MJPEG] socket");
+	            return;
+	        }
+
+	        int yes = 1;
+	        (void)::setsockopt(m_listenFd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+	        sockaddr_in addr{};
+	        addr.sin_family = AF_INET;
+	        addr.sin_port = htons(static_cast<uint16_t>(m_port));
+	        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+	        if (::bind(m_listenFd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0)
+	        {
+	            std::perror("[MJPEG] bind");
+	            return;
+	        }
+
+	        if (::listen(m_listenFd, 8) != 0)
+	        {
+	            std::perror("[MJPEG] listen");
+	            return;
+	        }
+
+	        std::cerr << "[MJPEG] listening on 0.0.0.0:" << m_port
+	                  << " (open http://<device-ip>:" << m_port << "/ on your laptop)" << std::endl;
+
+	        pollfd pfd{};
+	        pfd.fd = m_listenFd;
+	        pfd.events = POLLIN;
+
+	        while (m_running.load())
+	        {
+	            int prc = ::poll(&pfd, 1, 500);
+	            if (!m_running.load())
+	                break;
+	            if (prc <= 0)
+	                continue;
+	            if (!(pfd.revents & POLLIN))
+	                continue;
+
+	            sockaddr_in clientAddr{};
+	            socklen_t clientLen = sizeof(clientAddr);
+	            int clientFd = ::accept(m_listenFd, reinterpret_cast<sockaddr*>(&clientAddr), &clientLen);
+	            if (clientFd < 0)
+	                continue;
+
+	            std::thread([this, clientFd]() { this->handleClient(clientFd); }).detach();
+	        }
+	    }
+
+	    void handleClient(int clientFd)
+	    {
+	        auto closeFd = [clientFd]()
+	        {
+	            ::shutdown(clientFd, SHUT_RDWR);
+	            ::close(clientFd);
+	        };
+
+	        char buf[4096];
+	        ssize_t n = ::recv(clientFd, buf, sizeof(buf) - 1, 0);
+	        if (n <= 0)
+	        {
+	            closeFd();
+	            return;
+	        }
+	        buf[n] = '\0';
+	        std::string req(buf);
+
+	        std::string path = "/";
+	        size_t lineEnd = req.find("\r\n");
+	        std::string firstLine = (lineEnd == std::string::npos) ? req : req.substr(0, lineEnd);
+	        if (firstLine.rfind("GET ", 0) == 0)
+	        {
+	            size_t pathStart = 4;
+	            size_t pathEnd = firstLine.find(' ', pathStart);
+	            if (pathEnd != std::string::npos && pathEnd > pathStart)
+	                path = firstLine.substr(pathStart, pathEnd - pathStart);
+	        }
+
+	        if (path == "/stream" || path == "/stream.mjpg" || path == "/stream.mjpeg")
+	        {
+	            if (!sendAll(clientFd,
+	                    "HTTP/1.0 200 OK\r\n"
+	                    "Server: AR-MJPEG\r\n"
+	                    "Cache-Control: no-cache\r\n"
+	                    "Pragma: no-cache\r\n"
+	                    "Connection: close\r\n"
+	                    "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n"))
+	            {
+	                closeFd();
+	                return;
+	            }
+
+	            std::uint64_t lastSeq = 0;
+	            while (m_running.load())
+	            {
+	                std::vector<uchar> jpeg;
+	                std::uint64_t seq = 0;
+	                {
+	                    std::unique_lock<std::mutex> lock(m_mutex);
+	                    m_frameCv.wait_for(lock, std::chrono::milliseconds(200), [&]()
+	                    {
+	                        return !m_running.load() || (!m_latestJpeg.empty() && m_frameSeq != lastSeq);
+	                    });
+	                    if (!m_running.load())
+	                        break;
+	                    if (m_latestJpeg.empty() || m_frameSeq == lastSeq)
+	                        continue;
+	                    jpeg = m_latestJpeg;
+	                    seq = m_frameSeq;
+	                }
+
+	                std::string header = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
+	                                     std::to_string(jpeg.size()) + "\r\n\r\n";
+	                if (!sendAll(clientFd, header) ||
+	                    !sendAll(clientFd, jpeg.data(), jpeg.size()) ||
+	                    !sendAll(clientFd, "\r\n"))
+	                {
+	                    break;
+	                }
+	                lastSeq = seq;
+	            }
+
+	            closeFd();
+	            return;
+	        }
+
+	        const char* body =
+	            "<!doctype html><html><head><meta charset='utf-8'/>"
+	            "<title>AR MJPEG</title>"
+	            "<style>body{font-family:sans-serif;margin:16px}img{max-width:100%;height:auto}</style>"
+	            "</head><body>"
+	            "<h3>AR MJPEG Stream</h3>"
+	            "<p><a href='/stream.mjpg'>Open raw stream</a></p>"
+	            "<img src='/stream.mjpg' alt='stream'/>"
+	            "</body></html>";
+
+	        std::string resp = "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: " +
+	                           std::to_string(std::strlen(body)) + "\r\n\r\n" + body;
+	        (void)sendAll(clientFd, resp);
+	        closeFd();
+	    }
+
+	private:
+	    int m_port;
+	    int m_jpegQuality;
+	    int m_encodeFps;
+	    std::chrono::microseconds m_encodePeriod{0};
+	    std::chrono::steady_clock::time_point m_nextEncodeDeadline{};
+
+	    std::atomic<bool> m_running;
+	    int m_listenFd;
+	    std::thread m_acceptThread;
+
+	    std::mutex m_mutex;
+	    std::condition_variable m_frameCv;
+	    std::vector<uchar> m_latestJpeg;
+	    std::uint64_t m_frameSeq{0};
+	};
+	}
+
+	#define ACCEL_BASECTRL_ADDR              0x00 
+	static void log_breath(const char* tag)
+	{
     fprintf(stderr,
         "[BREATH %s] in=%3u  out=%3u  bgr_fifo=%3u  pad_fifo=%3u  gray_fifo=%3u\n Accelerator Done: %3u",
         tag,
@@ -258,7 +535,11 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
  * In addition, this function draw overlay with debug information on top of the AR window.
  * Returns true if processing loop should be stopped; otherwise - false.
  */
-bool processFrame(const cv::Mat& displayFrame, const cv::Mat& processedFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx);
+bool processFrame(const cv::Mat& displayFrame,
+                  const cv::Mat& processedFrame,
+                  ARPipeline& pipeline,
+                  ARDrawingContext& drawingCtx,
+                  HttpMjpegServer* mjpegServer);
 
 static void configureImageOverlay(ARDrawingContext& drawingCtx);
 
@@ -457,6 +738,13 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
     ARPipeline pipeline(patternImage, calibration);
     ARDrawingContext drawingCtx("Markerless AR", frameSize, calibration);
     configureImageOverlay(drawingCtx);
+
+    std::unique_ptr<HttpMjpegServer> mjpegServer;
+    const int mjpegPort = getEnvInt("AR_MJPEG_PORT", 0);
+    if (mjpegPort > 0)
+        mjpegServer.reset(new HttpMjpegServer(mjpegPort,
+                                             getEnvInt("AR_MJPEG_QUALITY", 80),
+                                             getEnvInt("AR_MJPEG_FPS", 15)));
 
     using Clock = std::chrono::steady_clock;
     const auto framePeriod = std::chrono::milliseconds(1000 / getTargetFps());
@@ -899,7 +1187,7 @@ void processVideo(const cv::Mat& patternImage, CameraCalibration& calibration, c
 #if COLLECTDA
         const auto frameStart = Clock::now();
 #endif
-        shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx);
+        shouldQuit = processFrame(displayFrame, processedForDetection, pipeline, drawingCtx, mjpegServer.get());
 #if COLLECTDA
         const auto frameEnd = Clock::now();
         const auto frameUs = static_cast<std::uint64_t>(
@@ -941,6 +1229,13 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     // Load optional overlay image once and keep it in rendering context.
     configureImageOverlay(drawingCtx);
 
+    std::unique_ptr<HttpMjpegServer> mjpegServer;
+    const int mjpegPort = getEnvInt("AR_MJPEG_PORT", 0);
+    if (mjpegPort > 0)
+        mjpegServer.reset(new HttpMjpegServer(mjpegPort,
+                                             getEnvInt("AR_MJPEG_QUALITY", 80),
+                                             getEnvInt("AR_MJPEG_FPS", 15)));
+
     using Clock = std::chrono::steady_clock;
     const auto framePeriod = std::chrono::milliseconds(1000 / getTargetFps());
     auto nextFrameDeadline = Clock::now();
@@ -948,7 +1243,7 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     bool shouldQuit = false;
     do
     {
-        shouldQuit = processFrame(image, image, pipeline, drawingCtx);
+        shouldQuit = processFrame(image, image, pipeline, drawingCtx, mjpegServer.get());
         if (!shouldQuit)
         {
             nextFrameDeadline += framePeriod;
@@ -961,7 +1256,11 @@ void processSingleImage(const cv::Mat& patternImage, CameraCalibration& calibrat
     } while (!shouldQuit);
 }
 
-bool processFrame(const cv::Mat& displayFrame, const cv::Mat& processedFrame, ARPipeline& pipeline, ARDrawingContext& drawingCtx)
+bool processFrame(const cv::Mat& displayFrame,
+                  const cv::Mat& processedFrame,
+                  ARPipeline& pipeline,
+                  ARDrawingContext& drawingCtx,
+                  HttpMjpegServer* mjpegServer)
 {
     // Clone image used for background (we will draw overlay on it)
     cv::Mat img = displayFrame.clone();
@@ -1001,6 +1300,14 @@ bool processFrame(const cv::Mat& displayFrame, const cv::Mat& processedFrame, AR
 
     // Set a new camera frame:
     drawingCtx.updateBackground(img);
+
+    if (mjpegServer)
+    {
+        cv::Mat streamFrame;
+        if (!drawingCtx.composeFrameForStreaming(img, streamFrame))
+            streamFrame = img;
+        mjpegServer->pushFrameBgr(streamFrame);
+    }
 
     // Request redraw of the window:
     drawingCtx.updateWindow();
