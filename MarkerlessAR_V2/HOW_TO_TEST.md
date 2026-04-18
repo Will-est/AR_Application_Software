@@ -20,6 +20,7 @@ cmake --build AR_Application_Software/MarkerlessAR_V2/build -j 4 --target ARProj
 Notes:
 - Use `--target ARProject` to avoid running the repo’s `install_after_build` target.
 - The binary will be at `AR_Application_Software/MarkerlessAR_V2/build/src/ARProject.out`.
+- Ultra96 convenience script: `AR_Application_Software/MarkerlessAR_V2/Artifacts/build.sh` (run with `bash` or `chmod +x` first).
 
 ## Run (Camera)
 
